@@ -1,0 +1,103 @@
+#!/usr/bin/bash
+# ------------------------------------------------------------------------------
+CEN_LEGAL="anonym (c) 2022; Alle Rechte vorbehalten"
+CEN_TITLE="Reboot via kexec"
+
+
+# Import the bash library, set name and version TODO
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -r "$0" "0.00:1" || exit 2
+
+# Minimum/maximum argument count
+CEN_RUN_MIN_ARGS=1              # min arg count, see arguments() TODO
+CEN_RUN_MAX_ARGS=+              # max arg count
+
+# Data
+CEN_OPT_NOBOOT=                 # see --noboot
+
+# ------------------------------------------------------------------------------
+# The one and only action
+# ------------------------------------------------------------------------------
+run() {
+    context -s
+    local kern="$1" kini="$2" kcmd
+
+    if [ $# = 1 ] ; then
+        kini='-'
+        if [ "$kern" = '-' ] ; then
+            kern="/mnt/vol0/Volumes/Root/boot"
+        elif [ "${kern/[\.\/]/}" = "$kern"  ] ; then
+            kern="/mnt/vol0/Volumes/Root.$kern/boot"
+        fi
+    fi
+    
+    [ "$kern" = '-' ] && kern='/boot/vmlinuz'
+    [ -d "$kern" ] && kern+='/vmlinuz'
+    prettypath -s kern
+    [ "$kini" = '-' ] && kini="${kern%vmlinuz}initrd.img"
+    if ! [ -s "$kern" ] ; then
+         error "No kernel image found:" "$kern"
+     elif ! [ -s "$kini" ] ; then
+        error "No initrd found:" "$kini"
+    fi
+    shift ; shift ; kcmd=("$@")
+    error -t || return
+
+    prettypath -c -s kern
+    prettypath -c -s kini
+    if [ ${#kcmd[*]} = 0 ] ; then
+        local farg="${kern%/*}/kernel-cmdline"
+        [ ! -f "$farg" ] && [ -f "$farg-off" ] && farg="$farg-off"
+        inpdata -a kcmd -r -- "$farg"
+    elif [ "$kcmd" = - ] ; then
+        kcmd=()
+    fi
+    message "Booting: " "$kern initrd=$kini ${kcmd[*]}"
+    system -e -p -- kexec -l "$kern" --initrd "$kini" --append "${kcmd[*]}"
+    error -t || return
+    if [ -n "$CEN_OPT_NOBOOT" ] ; then
+        message -a "Loading kernel succeeded, booting disabled via --noboot"
+        return
+    fi
+    message -a "Loading kernel succeeded, booting..."
+    system -e -p systemctl start systemd-kexec.service
+}
+
+# ------------------------------------------------------------------------------
+# option parsing: <option> <argument>
+# ------------------------------------------------------------------------------
+options() {
+
+    case "$1" in
+
+    -N|--nob*)
+        optarg 'noboot' CEN_OPT_NOBOOT     ;;   # simple flag
+
+    esac
+}
+
+# ------------------------------------------------------------------------------
+# print usage info
+# ------------------------------------------------------------------------------
+usage() {
+    usageset -u "$CEN_NAME <option>... -|<suff>|<path>" \
+             -u "$CEN_NAME <option>... <kernel> <initrd>|- <args>..." \
+             -u - \
+             -u "$CEN_TITLE."
+
+    usageset -l $"arguments" \
+             -t "<suff>          "$"suffix of a 'Root' volume" \
+             -t "<path>          "$"override path of /boot folder" \
+
+    usageset -l $"examples" \
+             -t "$CEN_NAME -        # reboot current kernel, use kernel-cmdline file"\
+             -t "$CEN_NAME testing  # boot volume Root.testing, use kernel-cmdline"\
+             -t "$CEN_NAME mykernel myinitrd splash quiet"\
+
+}
+
+# ------------------------------------------------------------------------------
+# Finally call the library to execute the script
+# ------------------------------------------------------------------------------
+main "$@" ; quit
+
+# the end

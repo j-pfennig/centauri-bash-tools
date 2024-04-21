@@ -1,0 +1,569 @@
+#!/bin/bash
+# ------------------------------------------------------------------------------
+CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2007-2020; BSD License"
+CEN_TITLE="Tool for LDAP (+ Samba3) maintenance"
+
+# Import the bash library, set name and version
+PATH+=":${0%/*}" . _centauri_bash_lib -y "$0" "0.40" || exit 2
+
+# ------------------------------------------------------------------------------
+
+CEN_HOME=
+CEN_ROAMING=
+CEN_LINUX=
+CEN_LDAP=
+CEN_SAMBA=
+CEN_SMBC=
+CEN_PASSWORD=
+
+haveLdapScripts() {
+    # extra samba config file to contact the ldap server directly (by default a
+    # client computer would foreward requests to it's domain controller) ...
+    SAMBANETCFG="/etc/samba/smbpass.conf"
+    [ -e "$SAMBANETCFG" ] || SAMBANETCFG="/etc/samba/smb.conf"
+    [ -e "$SAMBAPAMCFG" ] || SAMBAPAMCFG="/etc/samba/smbpass.conf"
+    LDAPDATA="/var/lib/ldap"
+
+    # stuff needed to run the patched ldapscripts ...
+    export  CONFIG PATH LDAPSCRIPTS _RUNTIMEFILE _CONFIGFILE _CREATEHOME
+    LDAPSCRIPTS="/usr/local/share/centauritools/ldap/scripts"
+    [ -d "LDAPSCRIPTS" ] || LDAPSCRIPTS="$CEN_TOOLS/setup/ldap/scripts"
+
+    if [ ! -d "LDAPSCRIPTS" ] ; then
+        error "Need a tailored version of 'ldapscripts' that is not installed"
+        return 1
+    fi
+
+    ### /etc/default/centaurildap checks for "$LDAPSCRIPTS" ###
+
+    _RUNTIMEFILE="$LDAPSCRIPTS/runtime"
+    _CONFIGFILE="/etc/default/centaurildap"
+    _CREATEHOME="0"
+    CONFIG=
+    PATH="$LDAPSCRIPTS:$PATH"
+}
+
+# ------------------------------------------------------------------------------
+# helper (should be run only in a sub shell
+# ------------------------------------------------------------------------------
+_find_ldap_user() {
+    haveLdapScripts || return
+     CONFIG="samba"
+     . $_RUNTIMEFILE
+     trace "Search LDAP for: $USUFFIX,$SUFFIX userid=$1"
+     local dmy="$(_ldapsearch "$USUFFIX,$SUFFIX" "(&(objectClass=account)(userid=$1))" cn)"
+     if [ -n "$dmy" ] ; then
+        echo "$CONFIG" ; return 0
+     fi
+
+     CONFIG="ldap"
+     . $_RUNTIMEFILE
+     trace "Search LDAP for: $USUFFIX,$SUFFIX userid=$1"
+     local dmy="$(_ldapsearch "$USUFFIX,$SUFFIX" "(&(objectClass=account)(userid=$1))" cn)"
+     if [ -n "$dmy" ] ; then
+        echo "$CONFIG" ; return 0
+     fi
+
+     return 1
+}
+
+actionList() {
+    haveLdapScripts || return
+    [ -z "$CEN_LDAP" ] && CONFIG="samba" || CONFIG="ldap"
+     . $_RUNTIMEFILE
+     #echo "BINDDN $BINDDN     BINDPW $BINDPW    BINDPWD $BINDPWD"
+     local item resu ocls='account' sstr="$USUFFIX,$SUFFIX"
+
+    if [ "$CEN_ACTION" = 'listgroups' ] ; then
+        ocls='posixGroup' ; sstr="$GSUFFIX,$SUFFIX"
+    fi
+
+    trace "List $CONFIG: $sstr (&(objectClass=$ocls))"
+     system -e -p -a resu -- _ldapsearch "$sstr" "(&(objectClass=$ocls))"
+     for item in "${resu[@]}" ; do
+      #  echo "$item" ; continue
+        item="${item##*uid=}"
+        item="${item##*cn=}"
+        item="${item%%,*}"
+        [ -z "$item" ] && continue
+        echo "$item"
+     done
+}
+
+actionPasswd() {
+    if [ -z "$CEN_PASSWORD" ] ; then
+        invoke -e "Missing --password option" ; return
+    fi
+    [ -z "$CEN_LDAP" ] && CONFIG="samba" || CONFIG="ldap"
+
+    if [ "$CONFIG" = "samba" ] ; then
+        system -e -p -- smbpasswd -U "$1" -s <<!X
+$CEN_PASSWORD
+$CEN_PASSWORD
+!X
+    else
+        . $_RUNTIMEFILE
+        system -e -p -- ldappasswd -D "$BINDDN" -w "$BINDPWD" -s "$CEN_PASSWORD" "uid=$1,$USUFFIX,$SUFFIX"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# helper (should be run only in a sub shell
+# ------------------------------------------------------------------------------
+_delete_from_groups() {
+    haveLdapScripts || return
+
+    local grp filter
+    filter="(&(objectClass=posixGroup)(memberUid=$1))"
+
+    # ldap groups
+    CONFIG="ldap"
+    . $_RUNTIMEFILE
+    trace "Search LDAP for: $GSUFFIX,$SUFFIX userid=$1"
+
+    for grp in $(_ldapsearch "$GSUFFIX,$SUFFIX" "$filter" cn | grep "^cn: " | sed -e "s/^cn: //") ; do
+       $LDAPSCRIPTS/ldapdeleteuserfromgroup "$1" "$grp"
+    done
+
+    # samba groups
+    CONFIG="samba"
+    . $_RUNTIMEFILE
+    trace "Search LDAP for: $GSUFFIX,$SUFFIX userid=$1"
+
+    for grp in $(_ldapsearch "$GSUFFIX,$SUFFIX" "$filter" cn | grep "^cn: " | sed -e "s/^cn: //") ; do
+       $LDAPSCRIPTS/ldapdeleteuserfromgroup "$1" "$grp"
+    done
+
+    # native groups
+    for grp in $(id -Gn "$1") ; do
+       gpasswd -d "$1" "$grp" >/dev/null 2>&1 && echo "Successfully deleted user $1 from group $grp"
+    done
+}
+
+# ------------------------------------------------------------------------------
+# helper                Args: user list...
+# ------------------------------------------------------------------------------
+runLdapScript() {
+   haveLdapScripts || return
+   local usr ; usr="$1" ; shift
+   local scr ; scr="$LDAPSCRIPTS/ldap$CEN_ACTION"
+   [ -e "$scr" ] ||  scr="$LDAPSCRIPTS/_ldap$CEN_ACTION"
+   [ -x "$scr" ] ||  fatal "No script for '$CEN_ACTION' in folder '$LDAPSCRIPTS'"
+   if [ -z "$1" ] ; then
+      trace "Running ldap '$CEN_ACTION' script (no extra args)"
+      "$scr" "$usr"
+   else
+      trace "Running ldap '$CEN_ACTION' script (extra args: $*)"
+      for grp in $* ; do "$scr" "$usr" $* ; done
+   fi
+}
+
+# ------------------------------------------------------------------------------
+# helper                Args: cmd args...
+# ------------------------------------------------------------------------------
+runSambaCommand() {
+    [ -f "$SAMBANETCFG" ] || fatal "Required '$SAMBANETCFG' file is missing"
+    local serv ;
+    # testparm sometimes seg-faults
+    # serv="$(testparm -s --parameter-name "passdb backend" "$SAMBANETCFG" 2>/dev/null)"
+    serv="$(grep "^[^#][[:space:]]*passdb backend[[:space:]]*=" $SAMBANETCFG)"
+    serv="${serv##*//}"
+    if [ -z "$serv" -a -r "$SAMBAPAMCFG" ] ; then
+       SAMBANETCFG="$SAMBAPAMCFG"
+       serv="$(grep "^[^#][[:space:]]*passdb backend[[:space:]]*=" $SAMBAPAMCFG)"
+       serv="${serv##*//}"
+    fi
+    [ -n "$serv" ] || fatal "Could not find server name, check '$SAMBANETCFG'"
+    trace "The Samba server is: $serv"
+
+    if [ "$1" = "net" ] ; then
+       shift
+       trace "Command: net -S "$serv" RPC $*"
+       local upwd
+       [ -r ~/.centaurildap ] && . ~/.centaurildap
+       if [ -n "$NET_USER" ] ; then
+          upwd="-U $NET_USER"
+       else
+          echo "Enter the password of the domain 'root' user ..."
+       fi
+       net -S "$serv" $upwd RPC $* || return 1
+    else
+       smbpasswd -c "$SAMBANETCFG" $* || return 1
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# helper                Args: user group
+# ------------------------------------------------------------------------------
+createHomeFolder() {
+   if [ -d "/home/$1" ] ; then
+      chown "$1:$2" "/home/$1"
+   else
+      message "Creating home folder '/home/$1'"
+      mkdir "/home/$1"  || return 1
+      cp /etc/skel/.* "/home/$1" >/dev/null 2>&1
+      cp /etc/skel/* "/home/$1"  >/dev/null 2>&1
+      chown -R "$1:$2" "/home/$1"
+      su $1 -c "/usr/local/bin/centaurisession login"
+   fi
+   chmod 751 "/home/$1"
+   return 0
+}
+
+# ------------------------------------------------------------------------------
+# Run an ldap script
+# ------------------------------------------------------------------------------
+actionScript() {
+    # check the call
+    local apwd grp usr
+    case "$CEN_ACTION" in
+        adduser)
+            arguments 2 + "$@" || return ;;
+        deleteuser)
+            arguments 1 - "$@" || return ; apwd=1 ;;
+        addusertogroup)
+            arguments 2 - "$@" || return ; apwd=1 ;;
+        deleteuserfromgroup)
+            arguments 2 - "$@" || return ; apwd=1 ;;
+        addmachine)
+            CONFIG="samba"
+            arguments 2 - "$@" || return ;;
+        deletemachine)
+            CONFIG="samba"
+            arguments 1 - "$@" || return ;;
+        *)
+            arguments 1 3 "$@" || return ;;
+    esac
+    usr="$1" ; shift
+
+    [ "$EUID" = 0 ] || fatal "You must be a root user to run '$CEN_ACTION'"
+
+    # env vars for ldap scripts
+    [ "$CEN_LDAP" = 1  ] && CONFIG="ldap"
+    [ "$CEN_SMBC" = 1  ] && CONFIG="samba"
+    [ "$CEN_SAMBA" = 1 ] && CONFIG="samba"
+    [ "$CEN_LINUX" = 1 ] && CONFIG="linux"
+
+    # autodetect password type
+    if [ -z "$CONFIG" ] ; then
+       if [ -n "$apwd" ] ; then
+          if grep -q "^$usr:" /etc/passwd ; then
+             CONFIG="linux"
+          else
+             CONFIG="$(_find_ldap_user $usr)"
+             [ $? != 0 ] && fatal "User not found (try --native|--ldap|--samba)"
+          fi
+          message "Backend autodetected: $CONFIG"
+       else
+          fatal "Missing backend type (use --native|--ldap|--samba)"
+       fi
+    else
+       trace "Backend set by caller: $CONFIG"
+    fi
+
+    # pre processing
+    [ "$CEN_ACTION" = "deleteuser" ] &&
+       (_delete_from_groups $usr)
+
+    # helper to let smbd modify ldap data
+    if [ "$CEN_SMBC" = 1 ] ; then
+       message "Mode 'smbd', running ldapscript ..."
+       runLdapScript "$usr" $*
+       #echo -e "$usr\n$usr" | smbpasswd -a $usr -s
+
+    # use the domain samba server to create a samba user
+    elif [ "$CONFIG" = "samba" -a "$CEN_ACTION" = "adduser" ] ; then
+       #$LDAPSCRIPTS/ldapadduser "$usr" "$1"
+       runLdapScript "$usr" "$1"
+       trace "Mode 'samba + adduser', running 'net user add' ..."
+       if ! runSambaCommand net USER ADD "$usr" "$usr" ; then
+          CEN_EXIT=3 ; return
+       fi
+       [ "$1" != "users" ] && $LDAPSCRIPTS/ldapsetprimarygroup "$usr" "$1"
+
+    # create a LDAP non-Samba user, or modify an LDAP/Samba entry
+    elif [ "$CONFIG" != "linux" ] ; then
+       message "Mode 'ldap', running ldapscript ..."
+       runLdapScript "$usr" $*
+
+    # create a native Linux user
+    else
+       message "Mode 'linux', running native tools ..."
+       local xtra
+       case "$CEN_ACTION" in
+          adduser)         [ -n "$CEN_HOME" ] && xtra="--home /home/$usr"
+                           adduser ${xtra:---no-create-home} --ingroup $1 \
+                                   --disabled-password --gecos "Linux user" $usr ;;
+          deleteuser)      deluser $xtra $usr ;;
+          addusertogroup)  for grp in $* ; do gpasswd -a $usr $grp ; done ;;
+          *)               fatal "Action '$CEN_ACTION' is not implemented"
+       esac
+    fi
+
+    # postprocessing
+    [ "$CEN_ACTION" = "adduser" -a -n "$CEN_ROAMING" ] &&
+       CONFIG=ldap $LDAPSCRIPTS/ldapaddusertogroup $usr roaming
+
+    [ "$CEN_ACTION" = "adduser" -a "$CEN_HOME" = 1 ] &&
+       createHomeFolder "$usr" "$1"
+
+    [ "$CEN_ACTION" = "adduser" -a -n "$CEN_PASSWORD" ] &&
+       passwd $usr
+
+    [ "$CEN_ACTION" = "deleteuser" -a "$CEN_HOME" = 1 -a -d /home/$usr ] &&
+       confirm "Do you want to delete the '/home/$usr' directory" && rm -r /home/$usr
+
+    [ "$CEN_SMBC" = 1 ] && CEN_EXIT=0
+}
+
+# ------------------------------------------------------------------------------
+# List users
+# ------------------------------------------------------------------------------
+actionUsers() {
+    # generate the user list
+    local dmy usr uid gid lasg lasn
+
+    TEMP="${TMP:-/tmp}/$CEN_NAME_$$"
+    trap "rm -f ${TEMP}*.tmp" 0
+    getent passwd | sed s/:/\\t/g > ${TEMP}_usr.tmp
+
+    echo "   Username        uid     Primary Group   gid"
+    echo "   ───────────────────────────────────────────"
+    IFS=$'\t'
+    while read usr dmy uid gid dmy ; do
+# TODO fix this
+[ "$CEN_LINUX" != "1" ] &&
+       [ "$uid" -lt 1000 -o "$uid" -ge 50000 ] && continue
+       if [ "$lasg" != "$gid" ] ; then
+          lasg="$gid"
+          lasn="$(id -gn $usr)"
+       fi
+       printf "   %-12s %6s     %-12s %6s\n" "$usr" "$uid" "$lasn" "$gid"
+    done <${TEMP}_usr.tmp | sort
+    unset IFS
+    echo "   ───────────────────────────────────────────"
+}
+
+
+# ------------------------------------------------------------------------------
+# Grant administrative rights to a samba user
+# ------------------------------------------------------------------------------
+actionGrant() {
+    [ "$EUID" = 0 ] || fatal "You must be a root user to run '$CEN_ACTION'"
+    runSambaCommand net rpc rights grant "$1" \
+                    SeAddUsersPrivilege SeMachineAccountPrivilege \
+                    SePrintOperatorPrivilege SeRemoteShutdownPrivilege \
+                    SeDiskOperatorPrivilege
+}
+
+# ------------------------------------------------------------------------------
+# Set domain password and join the domain
+# ------------------------------------------------------------------------------
+actionJoin() {
+    [ "$EUID" = 0 ] || fatal "You must be a root user to run '$CEN_ACTION'"
+
+    if [ -z "$1" ] ; then
+       runSambaCommand net join member || CEN_EXIT=$?
+    else
+       local popt ; popt="-W"
+       [ "$1" != "-" ] && popt="-w $1"
+       if runSambaCommand smbpasswd $popt ; then
+          runSambaCommand net join member || CEN_EXIT=$?
+       else
+          CEN_EXIT=$?
+       fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Create/Delete home folders
+# ------------------------------------------------------------------------------
+actionHome() {
+    [ "$EUID" = 0 ] || fatal "You must be a root user to run '$CEN_ACTION'"
+    local usr mod grp
+    mod="$1" ; shift
+    for usr in $* ; do
+        if [ "$mod" = "add" ] ; then
+           grp="$(id -gn "$usr" 2>/dev/null)"
+           if [ -z "$grp" ] ; then
+              error "Found no group for '$usr', user skipped"
+           else
+              createHomeFolder "$usr" "$grp"
+           fi
+        elif [ -d "/home/$usr" ] ; then
+           confirm "Do you want to delete the '/home/$usr' directory" && rm -r "/home/$usr"
+        fi
+    done
+}
+
+# ------------------------------------------------------------------------------
+# Backup/Restore LDAP database
+# ------------------------------------------------------------------------------
+actionDatabase() {
+    haveLdapScripts || return
+    local argx ; argx=1 ; [ "$CEN_ACTION" = "initialize" ] && argx=0
+    arguments $argx - "$@" || return
+    [ "$EUID" = 0 ] || fatal "You must be a root user to run '$CEN_ACTION'"
+    local orig ; orig="$PWD"
+    if [ "$CEN_ACTION" != "backup" ] ; then
+       [ -z "$1" -o -r "$1" ] || fatal "Cannot read file: $1"
+       [ -d "$LDAPDATA" ] || mkdir "$LDAPDATA"
+       local bstp ; pgrep slapd >/dev/null ; bstp=$?
+       if [ "$bstp" = 0 ] ; then
+           message "Trying to stop slapd..."
+           /etc/init.d/slapd stop
+       fi
+       local bfil ; bfil=$(mktemp -d ${LDAPDATA}.XXXXXX)
+       mv $LDAPDATA/* "$bfil" || fatal "Could not create: $bfil"
+       message "Backup of old data is in: $bfil"
+       if [ "$CEN_ACTION" = "restore" ] ; then
+           slapadd -l "$1"
+       else
+           $LDAPSCRIPTS/_ldapinit
+       fi
+       chown -R openldap:openldap "$LDAPDATA"
+       chmod -R 700 "$LDAPDATA"
+       if [ "$bstp" = 0 ] ; then
+           message "Trying to restart slapd..."
+           /etc/init.d/slapd start
+       fi
+    else
+       [ -d "$LDAPDATA" ] || fatal "Database not found: $LDAPDATA"
+       slapcat -l "$1"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Option parsing
+# ------------------------------------------------------------------------------
+options() {
+    case "$CEN_ACTION" in
+    -c|--cre*)
+        optarg "create"     CEN_HOME ;;
+    -n|--nat*)
+        optarg "native"     CEN_LINUX ;;
+    -p|--pas*)
+        optarg "password"   CEN_PASSWORD -t ;;
+    -r|--roa*)
+        optarg "roaming"    CEN_ROAMING ;;
+    -l|--lda|--ldap)
+        optarg "ldap"       CEN_LDAP ;;
+    -s|--sam*)
+        optarg "samba"      CEN_SAMBA ;;
+    -w|--whe*)
+        context -s ; CEN_ARGS=1 ;;
+    -x|--smb*)
+        message "Samba Daemon action: $CEN_ACTION $*"
+        optarg "smbconf"    CEN_SMBC ;;
+    esac
+}
+
+# ------------------------------------------------------------------------------
+# Action parsing
+# ------------------------------------------------------------------------------
+actions() {
+    case "$CEN_ACTION" in
+
+    lis*g*)
+        invoke 'listgroups' actionList 0 ;;
+    lis*)
+        invoke 'listusers'  actionList 0 ;;
+
+    pas*)
+        invoke 'passwd' - 1 ;;
+
+    addmachine|adduser|addgroup|addusertogroup)
+        invoke - actionScript ;;
+
+    deletemachine|deleteuser|deletegroup|deleteuserfromgroup)
+        invoke - actionScript ;;
+
+    renameuser|setprimarygroup)
+        invoke - actionScript ;;
+
+    join)
+        invoke - actionJoin 0 1 ;;
+
+    homeadd)
+        invoke - actionHome 1 + add "$@" ;;
+
+    homedel*)
+        invoke - actionHome 1 + del "$@" ;;
+
+    gran*)
+        invoke - actionGrant 1 ;;
+
+    user*)
+        invoke - actionUsers 0 ;;
+
+    backup|restore|initialize)
+        invoke - actionDatabase ;;
+
+    esac
+}
+
+# ------------------------------------------------------------------------------
+# Print usage info
+# ------------------------------------------------------------------------------
+usage() {
+    usagecat << !EOF
+$CEN_USE_HEADER
+
+       This tool needs a tailored version of 'ldapscripts' that is no longer
+       maintained. So most commands will fail. $CEN_NAME is going to be
+       removed from centauritools.
+
+$CEN_USE_OPTIONS
+       -w --wheel           use sudo to get root privilege
+
+       user management options (only for user management actions):
+
+       -c --create          create home folders
+       -p --password        ask for a password
+       -r --roaming         make the user roaming
+
+       -l --ldap            (create) a LDAP non-Samba object
+       -n --native          (create) a native linux opject
+       -s --samba           (create) a LDAP Samba object
+       -x --smbconf         for use via smb.conf (do LDAP entries only)
+
+actions:
+       ••• user management •••
+
+       adduser <user> <group>          # create a user account
+       addgroup <group>                # add a group
+       addusertogroup <user> <group>   # add a user to a group
+       deleteuser <user>               # delete the user
+       deletegroup <group>             # delete the group
+       deleteuserfromgroup <usr> <grp> # delete user from group
+       homeadd <user>...               # make local home folders
+       homedelete <user>...            # delete local home folders
+       renameuser <oldname> <newname>  # rename a user
+       setprimarygroup <user> <group>  # set the user's primary group
+
+       listgroups                      # ldap/samba list group names
+       listusers                       # ldap/samba list user names
+       passwd <user> [<passwd>]        # set password of a user
+
+       ••• Samba management •••
+
+       addmachine <name>$ <group>      # create a machine account
+       deletemachine <name>$           # delete a machine account
+       grant <user>                    # grant admin rights to a user
+       join [ldap_bind_passwd]         # join the Samba domain
+
+       ••• LDAP database management •••
+
+       initialize                      # create new db with initial data
+       backup <outputfile>             # create a backup
+       restore <inputfile>             # load database from backup
+
+!EOF
+}
+
+# ------------------------------------------------------------------------------
+# Finally call the library to execute the script
+# ------------------------------------------------------------------------------
+main "$@" ; quit
+
+# the end

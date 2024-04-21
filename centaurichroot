@@ -1,0 +1,459 @@
+#!/bin/bash
+# ------------------------------------------------------------------------------
+CEN_LEGAL="Dr. Jürgen Pfennig (c) 2020-2023; BSD License"
+CEN_TITLE="Run a program or shell in a chroot environment"
+
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m ext -y "$0" '0.07:1' || exit 2
+# don't use win (which would pull-in ext, ins and sys) in package to save space
+[ -z "$CEN_PACKAGE" ] && embed -m _centauri_bash_win
+
+# Data
+
+CEN_OPT_BASE=                   # see --base
+CEN_OPT_ENVVAR=()               # see --envvar
+CEN_OPT_MOUNTS=                 # see --mounts
+CEN_OPT_NICK=                   # see --nick
+CEN_OPT_USER=                   # see --user
+
+DAT_QUIT_LIST=                  # see quit()
+DAT_MOUNT_LIST=                 # see do_setup
+DAT_TEMPDIR=                    # temp folder
+DAT_NICK=                       # distribution nick name
+DAT_HOST=
+DAT_MODE=
+
+# locale SE
+# /etc/hosts   10.21.2.11 alpha alpha.centauri.home
+# localedef -f UTF-8 -i en_US en_SE.UTF-8
+# unset LC_TIME (LANG)
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
+
+do_chroot() {
+    dryrun "chroot $*" && return
+    if [ "$1" = '-k' ] ; then
+        shift
+    else
+        unset LC_TIME LANG
+        LC_ALL=C
+    fi
+    export TMP="/tmp" TMPDIR="/tmp"
+    chroot "$CEN_OPT_BASE" "$@"
+}
+
+do_setup() {
+    [ -n "$DAT_QUIT_LIST" ] && return
+
+    local fldr curr="$PWD"      # check and get chroot path from "$1" ...
+    folder -c -f -s fldr "$CEN_OPT_BASE" ; CEN_OPT_BASE="$PWD" ; folder -c "$curr"
+
+    system -c -f mount umount chroot su
+
+    DAT_MOUNT_LIST=()
+    DAT_QUIT_LIST="$CEN_HOOK_QUIT"
+    CEN_HOOK_QUIT=quit_hook
+
+    # mount something and add mountpoint to list
+    do_mount() {
+        local marg=("$@") ; shift $(($# - 1))
+
+        if [ "$CEN_ACTION" = 'umount' ] ; then
+            [ -d "$1" ] || return
+        else
+            folder -m "$1"
+            system -e -p -t -- mount "${marg[@]}" || return
+        fi
+        DAT_MOUNT_LIST+=("$1")          # save for umount
+    }
+
+    if [ "$CEN_ACTION" = 'umount' ] ; then
+        message -d - "Unounting at $fldr ..."
+    elif findmount devpts "$fldr/dev/pts" ; then
+        quit -e -p "Destination already in use (%s)" "$fldr"
+    else
+        message -d - "Mounting at $fldr ..."
+    fi
+
+    fldr="$CEN_OPT_BASE"
+    do_mount -t devpts devpts "$fldr/dev/pts"
+    do_mount -t proc   proc   "$fldr/proc"
+    do_mount -t sysfs  sysfs  "$fldr/sys"
+
+    if [ -n "$CEN_OPT_MOUNTS" -o "$CEN_ACTION" = 'umount' ] ; then
+        do_mount --bind /tmp    "$fldr/tmp"
+        do_mount --bind /export "$fldr/export"
+        do_mount --bind /home   "$fldr/home"
+        do_mount --bind /shared "$fldr/shared"
+    fi
+}
+
+quit_hook() {
+    if [ -n "$DAT_MOUNT_LIST" ] ; then
+        message -d - "Unmounting ..."
+        folder -c /
+        system -e -p -- umount "${DAT_MOUNT_LIST[@]}"
+    fi
+    remove -d "$DAT_TEMPDIR"
+    $DAT_QUIT_LIST "$@"
+}
+
+# ------------------------------------------------------------------------------
+# Shell in chroot: -no args-
+# ------------------------------------------------------------------------------
+actionChroot() {
+    do_setup
+    local cusr="${CEN_OPT_USER:--}" ; [ "$cusr" = '-' ] && cusr="${SUDO_USER:-$LOGNAME}"
+
+    if error -t ; then
+        message -d - "Running chroot ..."
+        if [ "$CEN_ACTION" = 'login' ] ; then
+            local aarg=("${CEN_OPT_ENVVAR[@]}" /bin/bash -l)
+            do_chroot -k runuser "$cusr" -c "/usr/bin/env ${aarg[*]}"
+        elif [ "$CEN_ACTION" = 'shell' ] ; then
+            do_chroot env "${CEN_OPT_ENVVAR[@]}" /bin/bash -i
+        else
+            local envv
+            [ -n "$CEN_OPT_ENVVAR" ] && envv="${CEN_OPT_ENVVAR[*]} "
+            do_chroot -k runuser "$cusr" -c "$envv$@"
+        fi
+    else
+        error "Mount failure, skipping chroot command"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Initialize chroot systen: <distro> <host> [<mode>]
+# ------------------------------------------------------------------------------
+actionInit() {
+    local owni="$CEN_TOOLS/centauriowner"
+    [ -x "$owni" ] || owni="$CEN_TOOLS/ownerInfo"
+
+    if [ -n "$CEN_OPT_NICK" ] ; then
+        DAT_NICK="$CEN_OPT_NICK"
+    else
+        case "$1" in
+            buster)     ;;
+            bullseye)   ;;
+            bookworm)   ;;
+            *)          fatal "Unknown distribution, use option '--nick=...'"
+        esac
+        DAT_NICK="$1"
+    fi
+    DAT_HOST="$2"
+    DAT_MODE="${3:-workstation}"
+
+    system -c -f debootstrap
+
+    local dchk="$CEN_OPT_BASE/bin" dist="$1"
+    [ "$dchk" -ef '/bin' ] && fatal "Cannot use root fs"
+    if [ -d "$dchk" ] ; then
+        confirm -y -n "Base folder not empty. Continue" || return
+    fi
+    folder -m -f -- "$CEN_OPT_BASE"
+
+    if [ -x "$CEN_OPT_BASE/usr/bin/apt" ] ; then
+        message -a "Skipping: debootstrap"
+    else
+        sysrun -e -z debootstrap "$dist" "$CEN_OPT_BASE"
+    fi
+
+    ___inhibit() {
+        [ "${1:--}" = '-' ] && return 0
+        [ -n "$CEN_OPT_FORCE" ] && return 0
+        [ ! -e "$CEN_OPT_BASE/$1" ]             # return status
+    }
+
+    ___setup() {
+        error -t || return 1                    # skip after error
+        if ! ___inhibit "$1" ; then
+            shift ; message "Skipping:" "$@" ; return 1
+        fi
+        shift
+        confirm -n -q "$@" || return 1
+        CEN_AUTOIND=
+        do_setup                                # mount filesystems
+        error -t                                # return status
+    }
+
+    # copy files: <source> <dest> <file>...
+    ___copy() {
+        local csrc="$1" cdes="$CEN_OPT_BASE/$2" clst=() cstr citm ; shift 2
+        [ -d "$csrc" ] || return
+        folder -m "$cdes"
+        for citm in "$@" ; do
+            [ -e "$csrc/$citm" ] || continue
+            cstr+=" $citm" ; clst+=("$csrc/$citm")
+        done
+        [ -n "$clst" ] || return
+        if [ "${#clst[*]}" = 1 ] ; then
+            confirm -a "Copy $csrc/${cstr:1}" || return
+        else
+            confirm -a "Copy $csrc/{${cstr:1}}" || return
+        fi
+        system -e -p -- cp -a -L "${clst[@]}" "$cdes"
+    }
+
+    # add entries to hosts: <ip> <name> <alias>...
+    ___host() {
+        local cdes="$CEN_OPT_BASE/etc/hosts"
+        grep -q "^$1" "$cdes" && return             # it works but . should be \.
+        echo "$*" >> "$cdes"
+    }
+
+    local dchr="${CEN_OPT_BASE##*/}"
+    create -v dchr "$CEN_OPT_BASE/etc/debian_chroot"
+
+    if ___setup '/etc/bash.centauri' "Copy centauri user configuration" ; then
+        ___copy '/etc'      'etc'      'bash.centauri' 'DIR_COLORS'
+        ___copy '/etc/skel' 'etc/skel' '.bash_aliases'  '.bash_logout'  '.bashrc'  '.profile'
+
+        ___copy '/etc'      'etc'      'passwd' 'group' 'shadow'
+        ___copy '/var/lib/extrausers' 'var/lib/extrausers' 'passwd' 'group'
+
+        ___copy '/etc'      'etc'      'fstab' 'securetty'
+        ___copy '/root'     'root'     '.bash_aliases'  '.bash_logout'  '.bashrc'  '.profile'
+
+        # make chroot installation use extrausers ...
+        do_chroot apt --yes install libnss-extrausers
+        create -t -h - "$CEN_OPT_BASE/etc/nsswitch.conf" <<!EOF
+passwd:         files extrausers
+group:          files extrausers
+shadow:         files extrausers
+gshadow:        files
+
+hosts:          db files dns
+protocols:      db files
+services:       db files
+!EOF
+    fi
+
+    if ___setup '/etc/locale.gen' "Install locales and vim" ; then
+        create -c -t "$CEN_OPT_BASE/etc/apt/sources.list" <<!EOF
+deb http://deb.debian.org/debian $dist main contrib non-free
+!EOF
+        ___host 10.21.2.10 alpha alpha.centauri.home
+        do_chroot apt update
+
+        do_chroot apt --yes install bash-completion locales vim
+        do_chroot apt --yes remove apparmor cron rsyslog vim-tiny
+
+        CEN_AUTOIND=
+        ___copy '/etc/apt'  'etc/apt'  'apt.conf'
+    fi
+
+    if ___setup '/etc/ssh' "Install console-setup, ssh, synaptic and kernel" ; then
+
+        do_chroot tasksel install ssh-server
+        do_chroot apt --yes install console-setup wpasupplicant ifmetric net-tools psmisc rsync \
+                                    tree synaptic encfs libpam-encfs libpam-mount libpam-mount-bin \
+                                    sssd-ad sssd-dbus sssd-krb5 sssd-tools libpam-sss libnss-sss
+
+        local marc
+        system -s marc -e -p -- uname -m
+        if [ "$marc" = "x86_64" ] ; then
+            do_chroot apt --yes install firmware-linux-free
+            do_chroot apt --yes install firmware-misc-nonfree firmware-iwlwifi firmware-realtek
+            do_chroot apt --yes install linux-image-amd64
+        else
+            warning "Kernel installation skipped, unknown architecture:" "${marc:-unknown}"
+        fi
+        embed "$owni" -A -P "$CEN_OPT_BASE" save "$CEN_OPT_BASE/root/OWNER-bootstrap" || quit -e
+
+        CEN_AUTOIND=
+        ___copy '/etc/wpa_supplicant' 'etc/wpa_supplicant' wpa_supplicant.conf
+        #___copy '/etc/network' 'etc/network' interfaces
+        create -c -t "$CEN_OPT_BASE/etc/network/interfaces" <<!EOF
+auto lo eth0 wlan0
+
+iface lo inet loopback
+
+iface eth0 inet static
+   address 10.21.2.299
+   netmask 255.255.252.0
+   metric  500
+   gateway 10.21.1.1
+
+iface wlan0 inet dhcp
+   wpa-conf /etc/wpa_supplicant/wpa_supplicant.conf
+   metric  600
+!EOF
+    fi
+
+    if ___setup '/var/centauri/configs' "Install centauri-tools ($DAT_NICK)" ; then
+        local dlib dtoo dver="$CEN_ROOT/configs/$dist/@admin"
+        folder -s DAT_TEMPDIR -m "$CEN_OPT_BASE/tmp/${CEN_NAME}_$$"
+        folder -s dlib -m "$DAT_TEMPDIR/library"
+        folder -s dtoo -m "$DAT_TEMPDIR/tools"
+        embed centauricopy -s "alpha:$dver/library" -i "*_???" "$dlib" || return
+        embed centauricopy -s "alpha:$dver/tools" -x "*/*" -i "*centauri*" "$dtoo" || return
+
+        do_chroot env -i "/tmp/${CEN_NAME}_$$/tools"/centauriconfig --yes \
+                  --nick="$DAT_NICK" --repos=alpha:centauri setup init
+    fi
+
+    if ___setup '/etc/default/centauri-bash-lib' "Apply repository settings" ; then
+        embed  "$owni" -A -P "$CEN_OPT_BASE" save "$CEN_OPT_BASE/root/OWNER-initial" || quit -e
+        do_chroot centauriconfig --yes --role="$DAT_MODE" --host="$DAT_HOST" setup install -- override
+        remove -d "$CEN_OPT_BASE/etc/network/"interfaces*
+        do_chroot centaurinetcfg setup "$DAT_HOST"
+    fi
+
+    if ___setup '/etc/sddm' "Install kde-desktop basics" ; then
+        do_chroot apt --yes install xorg sddm sddm-theme-debian-breeze kde-plasma-desktop
+    fi
+    create -c <<!EOF
+
+Remaining installation steps:
+
+    centauripackage -I -A <list>        # install remaining packets
+    vi /etc/fstab ...                   # edit fstab and other
+    centauriconfig --host="$DAT_HOST" --nick="$DAT_NICK" --repos=alpha:centauri get -- rput
+                                        # push to repository
+    chgrp ... /usr/bin/ssh-agent        # group must be _ssh (or ssh before bookworm)
+
+Final installation steps (not in chroot mode):
+
+    centaurirunlevel script             # configure runlevels
+    centauriefilinux create -- menu     # prepare efi boot
+
+!EOF
+}
+
+# ------------------------------------------------------------------------------
+# Add passwd entries: <user>|-
+# ------------------------------------------------------------------------------
+actionPasswd() {
+    # get a list of current users
+    local item lpwd=() fpwd="$CEN_OPT_BASE/etc/passwd"
+    if [ ! -s "$fpwd" ] ; then
+        error "Found no passwd file:" "$fpwd" ; return
+    fi
+    while IFS=$'\n' read -r item ; do
+        lpwd+=("${item%%:*}")
+    done <"$fpwd"
+
+    # call getent for new entries
+    local cusr="${1:-$CEN_OPT_USER}" ; [ -z "$cusr" ] && cusr="${SUDO_USER:-$LOGNAME}"
+    local plst=() user=()
+    [ "$cusr" = '-' ] || user+=("$cusr")
+    sysrun -q -a user -- getent passwd "${user[@]}"
+    if [ -z "$user" ] ; then
+        error "No passwd entries could be found" ; return
+    fi
+
+    # need /home/ folder and must not yet be in passwd
+    for item in "${user[@]}" ; do
+        [ "${item/:\/home\//}" = "$item" ] && continue
+        listsearch -c -i lpwd -- "${item%%:*}" || plst+=("$item")
+    done
+
+    case "${#plst[@]}" in
+    0)  message -a "No user to be added" ; return
+        ;;
+    1)  confirm -a -q "Add user '${plst%%:*}' to $fpwd" || return
+        ;;
+    *)  confirm -a -q "Add '${#plst[@]} users to $fpwd" || return
+    esac
+
+    for item in "${plst[@]}" ; do
+        echo "$item"
+    done >>"$fpwd"
+}
+
+# ------------------------------------------------------------------------------
+# Unmount filesystems: -no arg-
+# ------------------------------------------------------------------------------
+actionUmount() {
+    do_setup
+}
+
+# ------------------------------------------------------------------------------
+# option parsing
+# ------------------------------------------------------------------------------
+options() {
+    case "$1" in
+
+    -B|--bas|--base)
+        optarg "base"   -            -t    ;;   # folder
+    -E|--env*)
+        optarg "envvar" []           -t    ;;   # array
+    -M|--mou*)
+        optarg "mounts" -                  ;;   # flag
+    -N|--nic*)
+        optarg 'nick'   -            -t    ;;   # any text
+    -U|--use|--user)
+        optarg 'user'   -            -t    ;;   # any text
+
+    esac
+}
+
+# ------------------------------------------------------------------------------
+# action parsing: <verb> <argument>...
+# ------------------------------------------------------------------------------
+actions() {
+    case "$1" in
+
+    "")
+        if [ -z "$CEN_OPT_BASE" ] ; then
+            error "Missing '--base' option"
+        elif [ "$EUID" != 0 ] ; then
+            windows && message -d +3 "Running '$CEN_CMDARGS' in '$CEN_OPT_BASE'"
+            context -s              # rerun script as sudo if needed
+        fi ;;
+
+    ini*)
+        invoke 'init'     -             2  ;;   # one arg
+    log*)
+        invoke 'login'    actionChroot  0 ;;    # no args
+    pas*)
+        invoke 'passwd'   -           0 1 ;;    # optional arg
+    she*)
+        invoke 'shell'    actionChroot  0 ;;    # no args
+    unm*|umo*)
+        invoke 'umount'   -             0 ;;
+    *)
+        invoke 'execute'  actionChroot  1 - "$@"
+
+    esac
+}
+
+# ------------------------------------------------------------------------------
+# print usage info
+# ------------------------------------------------------------------------------
+usage() {
+    usagecat << !EOF
+$CEN_USE_HEADER
+
+$CEN_USE_OPTIONS
+
+       -B --base   <fldr>    (required) chroot folder to use
+       -E --envvar <envv>    (array) pass an environment variable
+       -M --mounts           mount /home /export /shared /tmp to chroot
+       -U --user   <user>    run shell/program as a user
+
+actions:
+       init        <dist> <name> [<mode>]
+                             setup chroot for given debian distribution
+       login                 run login shell as a user (see --user)
+       passwd    [<user>|-]  add entries to /etc/passwd, '-' for all
+       shell                 run shell as root
+       umount                undo mounts to chroot environment
+       [execute]   <prog>    run a program as a user (see --user)
+
+examples:
+       $CEN_NAME -B my-container my-program       # run a program
+
+       $CEN_NAME -B my-container shell            # run shell as root
+       $CEN_NAME -B my-container -M login         # run login shell as user
+
+       $CEN_NAME -B my-container init testing     # setup a chroot environment
+!EOF
+}
+
+# ------------------------------------------------------------------------------
+# Finally call the library to execute the script
+# ------------------------------------------------------------------------------
+main "$@" ; quit
+
+# the end
