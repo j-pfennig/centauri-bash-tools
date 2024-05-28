@@ -98,8 +98,7 @@ run_add() {
         dryrun "ln -s $divert $target" || symlink -c "$divert" "$target"
     else
         message -a "Adding diversion:" "$name" "(script)"
-        system -e -p dpkg-divert --add "$target" || return
-        rename -o "$target" "$target.distrib"
+        system -e -p dpkg-divert --rename --add "$target" || return
         if ! dryrun "<script $target>" ; then
             {   echo "#!/usr/bin/bash"
                 declare -f divert

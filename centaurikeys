@@ -1,11 +1,11 @@
-#!/bin/bash
+#!/usr/bin/bash
 # ------------------------------------------------------------------------------
 CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2015-2024; BSD License"
 CEN_TITLE="Manage ssh keys using a key store"
 # ------------------------------------------------------------------------------
 
 # Import the bash library, set name and version
-PATH="$PATH:.:${0%/*}" . _centauri_bash_lib -a -d -y - '0.16:2' || exit 2
+PATH="$PATH:.:${0%/*}" . _centauri_bash_lib -a -d -y - '0.17:2' || exit 2
 
 # data for options
 CEN_OPT_CREATE=         # see --create
@@ -25,6 +25,7 @@ DAT_WHOM_USER=          # see check_whom
 DAT_WHOM_HOME=          # see check_whom
 DAT_WHOM_FROM=          # see check_whom
 DAT_USER_LIST=()        # see user_list()
+
 # ------------------------------------------------------------------------------
 # Helper functions
 # ------------------------------------------------------------------------------
@@ -614,12 +615,14 @@ actionKnown() {
 # ------------------------------------------------------------------------------
 actionImport() {
     local serv dnam tdir dssh="$HOME/.ssh" what="${1:--}" user="${2:--}"
-    [ "$what" = - ] && what='client'
-    [ "$user" = - ] && user="$USER"
-    if netquery -f -q -s serv server ; then
+    [ "$what" = '-' ] && what='client'
+    [ "$user" = '-' ] && user="$USER"
+    if netquery -f -q server ; then
         invoke -w "You are on a server, nothing to import" ; return
     fi
-    [ -n "$CEN_OPT_HOST" ] && serv="$CEN_OPT_HOST"
+    serv="$CEN_OPT_HOST"
+    [ -z "$serv" ] && netquery -s serv current
+    [ -z "$serv" ] && fatal "No known server, please use '--host=<serv>'"
     netquery -f -q -s dnam domain
 
     # build: <user>@<server>:<base>/<domain>_<what>_<user>
@@ -630,23 +633,28 @@ actionImport() {
     # scp into tmp folder to avoid multiple password prompts
     folder -m -s tdir -t '_import' 700
     while : ; do
-        local file lraw lcpy=()
+        local file copy lraw lcpy=()
         system -e -p -- scp -p "$addr/*[._]*" "$tdir" || break
         backup_ssh "$user" "$dssh" || break
         matchpath -f -a lraw -- "$tdir"/*.pub "$tdir"/*.rsa "$tdir/authorized_keys"
         for file in "${lraw[@]}" ; do
-   message "File: ${file##*/}"
-            case "${file##*/}" in
-            $name.pub)          lcpy+=("$file") ;;
-            $name.rsa)          lcpy+=("$file") ;;
-            id_rsa|id_rsa.pub)  ;;
-            *_*_*.*)            ;;
-            *.pub|*.rsa)        lcpy+=("$file") ;;
-            authorized_keys)    lcpy+=("$file") ;;
+            copy="${file##*/}"
+            case "$copy" in
+                $name.pub)          ;;
+                $name.rsa)          ;;
+                id_rsa|id_rsa.pub)  continue ;;
+                authorized_keys)    ;;
+                *)                  file=
             esac
+            if [ -n "$file" ] ; then
+                trace -a -c "File to import" "$copy"
+                lcpy+=("$file")
+            else
+                trace -a -c "File to skip" "$copy"
+            fi
         done
     if [ -z "$lcpy" ] ; then
-        invoke -e "Got no key(s) from server" ; returnS
+        invoke -e "Got no key(s) from server" ; return
     fi
         copy -q -- "${lcpy[@]}" "$dssh" || break
         [ -e "$dssh/$name.rsa" -a -e "$dssh/$name.pub" ] || break

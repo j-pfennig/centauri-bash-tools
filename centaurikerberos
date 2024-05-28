@@ -1,10 +1,10 @@
 #!/bin/bash
 # ------------------------------------------------------------------------------
-CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2019-2023; BSD License"
+CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2019-2024; BSD License"
 CEN_TITLE="Samba-AD/Kerberos/NFS management tool"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -s -t -y - '0.22:2' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -s -t -y - '0.23:2' || exit 2
 
 # Data
 DAT_RUN_INIT=           # for action init/fallback
@@ -17,8 +17,6 @@ CEN_OPT_KERBEROS=       # see --kerberos
 CEN_OPT_OUTPUT=         # see --output
 CEN_OPT_PASSWORD=       # see --password
 CEN_OPT_SERVER=         # see --server
-
-# TODO vollen principal name an kinit übergeben (dns)
 
 # ------------------------------------------------------------------------------
 # helpers
@@ -242,7 +240,7 @@ server_info() {
 }
 
 # ------------------------------------------------------------------------------
-# Make a computer a secure NFS client
+# Make a computer a secure NFS client: [<admn>]
 # ------------------------------------------------------------------------------
 actionClient() {
     local gssm=('kstart' 'adcli')
@@ -290,8 +288,8 @@ actionClient() {
 
         if ! system -c samba-tool ; then
             trace -a -c $"samba-tool not found" $"samba is not installed"
-        elif confirm -n -y $"Join samba domain" ; then
-            actionJoin
+        elif [ -n "$1" ] ; then
+            actionJoin "$1"
             embed -v centaurisecrets $opts register -- client ; sleep 2
         elif confirm -n -y $"Register computer" ; then
             embed -v centaurisecrets $opts register -- client ; sleep 2
@@ -432,15 +430,17 @@ actionInit() {
 }
 
 # ------------------------------------------------------------------------------
-# Add join a samba domain: -no args-
+# Add join a samba domain: [<user>]
 # ------------------------------------------------------------------------------
 actionJoin() {
 
     # ------------------------------ pre-condition -----------------------------
     check_tools || return
     server_info
-    local pasw sdom="${DAT_SERVER[1]^^}"
-    get_paswd pasw || return
+    local pasw sdom="${DAT_SERVER[1]^^}" user="${1:--}"
+    [ "$user" = '-' ] && user='Administrator'
+    confirm -n -y $"Join samba domain" || return
+    get_paswd pasw "$user" || return
 
     # -------------------------------- kerberos --------------------------------
     if [ -n "$CEN_OPT_KERBEROS" ] ; then
@@ -556,7 +556,9 @@ actionMachine() {
             fi
 
         elif [ "$_verb" = 'delete' ] ; then
+            # delete (1) owner of SPNs (2) machine account
             system -q -- samba-tool user delete "$root"
+            system -e -p -- samba-tool machine delete "$hnam"
         else
             list_users -m "$hnam" ; return
         fi
@@ -566,7 +568,7 @@ actionMachine() {
     check_user "$root"
     if [ "$?" = 0 ] ; then
         [ "$_verb" = 'delete' ] &&
-            invoke -e invoke -e $"'%s' - machine could not be deleted" "$hnam"
+            invoke -e $"'%s' - machine could not be deleted" "$hnam"
     else
         [ -n "$CEN_OPT_DRYRUN" ] && return
         [ "$_verb" = 'create' ] &&
@@ -1142,7 +1144,7 @@ actions() {
     case "$CEN_ACTION" in
 
     # before 1st action: execute at master ...
-    "") if [ -n "$CEN_OPT_SERVER" ] && ! netquery MASTER ; then
+    '') if [ -n "$CEN_OPT_SERVER" ] && ! netquery MASTER ; then
             local opts=() item
             for item in "${CEN_CMDOPTS[@]}" ; do
                 case "$item" in
@@ -1157,7 +1159,7 @@ actions() {
         ;;
 
     cli*)
-        invoke -r 'client'    -        0   ;;
+        invoke -r 'client'    -        0 1 ;;
     des*)
         invoke    'destroy'   -        0   ;;
     fal*|tic*)
@@ -1169,7 +1171,7 @@ actions() {
     ini|init)
         invoke    'init'      -        0 1 ;;
     joi|join)
-        invoke -r 'join'      -        0   ;;
+        invoke -r 'join'      -        0 1 ;;
     key*)
         invoke -r 'keytab'    -        1   ;;
     mac*)
@@ -1222,8 +1224,8 @@ actions:
        renew    [<user>|+]  renew Kerberos ticket (runs 'init' if needed)
 
        ••• directory actions •••
-       client               make this computer a secure nfs client
-       join                 join this computer into a Samba-AD domain
+       client    [<admn>]   (join AD/DC) make this computer a NFS client
+       join      [<admn>]   join this computer into a Samba-AD domain
        provision <pasw>|-   samba (un-)provisioning as an AD/DC server
                             use <pasw> '-' to unprovision
        restore  <file>      restore saved samba stare from tar file
@@ -1244,6 +1246,7 @@ actions:
                             create/list/delete a Kerberos/Samba-AD user
 
 arguments:
+       <admn>               samba domain admin or '-' (default: Administrator)
        <conf>               config files to generate: krb5 sssd
        <gnam>, <gid>        group name, unix group id
        <host>               computer name

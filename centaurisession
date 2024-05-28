@@ -1,30 +1,33 @@
-#!/bin/bash
+#!/usr/bin/bash
 # ------------------------------------------------------------------------------
 CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2019-2024; BSD License"
 CEN_TITLE="Session configuration script"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -t -m sys -y - '0.14:1' 2 || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -t -m sys -y - '0.16:2' 2 || exit 2
 
 # Data
 # context -v 2      ##### DEBUG
 
 # KDE paths (_centauri_bash_sys loaded via '-m sys' sets version)
 if [ "$CEN_SYS_KDEVERS" '<' '005.000.000' ] ; then
-    DAT_KDE_APPS=".kde/share/apps"
-    DAT_KDE_KWAL="kwallet"
+    DAT_KDE_APPS='.kde/share/apps'
+    DAT_KDE_KWAL='kwallet'
 else
-    DAT_KDE_APPS=".local/share"
-    DAT_KDE_KWAL="kwalletd"
+    DAT_KDE_APPS='.local/share'
+    DAT_KDE_KWAL='kwalletd'
 fi
 
 # Localized data pairs
-DAT_DESKT=("Desktop"   $"Desktop"   "Schreibtisch")
-DAT_DOCUS=("Documents" $"Documents" "Dokumente")
-DAT_PUBLI=("Public"    $"Public"    "Öffentlich")
-DAT_SHARE=("Shared"    $"Shared"    "Geteilt")
-DAT_LOCAL=("Local"     $"Local"     "Lokal")
-DAT_ENCFS=("Private"   $"Private"   "Privat")
+DAT_DESKT=('Desktop'   $"Desktop"   'Schreibtisch')
+DAT_DOCUS=('Documents' $"Documents" 'Dokumente')
+DAT_PUBLI=('Public'    $"Public"    'Öffentlich')
+DAT_SHARE=('Shared'    $"Shared"    'Geteilt')
+DAT_LOCAL=('Local'     $"Local"     'Lokal')
+DAT_ENCFS=('Private'   $"Private"   'Privat')
+
+# folder for issue data
+DAT_ISSUE_DIR="$CEN_ROOT/persistent/issue.d"
 
 # ------------------------------------------------------------------------------
 # Helpers for translated folder names
@@ -60,22 +63,26 @@ ___xlat_find() {
 }
 
 # ------------------------------------------------------------------------------
-# autologin helper: -no arg-
+# autologin helper: [<user> [ntty>]]
 # ------------------------------------------------------------------------------
 actionAutologin() {
-    local word wrds home user="$1" ntty="${2:-6}"
-    readline -a wrds -i '/proc/cmdline' -x -w
-    if ! listsearch -g -m word -i wrds -- 'centaurilogin=*' ; then
-        invoke -w $"No 'centaurilogin=*' kernel parameter found" ; return
+    local word wrds home user="${1:-}" ntty="${2:-6}"
+    if [ "$user" = '-' ] ; then
+        readline -a wrds -i '/proc/cmdline' -x -w
+        if ! listsearch -g -m word -i wrds -- 'centaurilogin=*' ; then
+            invoke -e $"No 'centaurilogin=*' kernel parameter found" ; return
+        fi
+        word="${word#*=}"
+        [ -n "$word" ] && user="$word"
     fi
-    word="${word#*=}"
-    [ -n "$word" ] && user="$word"
-    [ "$user" = 'root' ] && home='/root' || home="/home/$word"
+    [ "$user" = 'root' ] && home='/root' || eval home="~$word"
     if ! [ -d "$home" ] ; then
         invoke -e "No home folder for '%s'" "$user" ; return
     fi
-    /usr/bin/chvt "$ntty"
-    system -e -x -- /sbin/agetty --autologin "$user" --noclear "tty$ntty" linux
+
+    sysfind -c -e -p "$PATH:/usr/bin:/usr/sbin" chvt agetty || return
+    sysrun -e    -- chvt "$ntty"
+    system -e -x -- agetty --autologin "$user" --noclear "tty$ntty" linux
 }
 
 # ------------------------------------------------------------------------------
@@ -305,9 +312,9 @@ The real location is: '$HOME/$dloc/Roaming_$dloc'.
 actionRoaming() {
     local mode="${1:-auto}"
     case "$mode" in
-        aut*)   mode="auto" ;;
-        onl*)   mode="online" ;;
-        off*)   mode="offline" ;;
+        aut*)   mode='auto' ;;
+        onl*)   mode='online' ;;
+        off*)   mode='offline' ;;
         *)      invoke -e $"mode '%s' invalid (use 'online' 'offline' or 'auto')" "$mode"
                 return
     esac
@@ -336,7 +343,7 @@ actionRoaming() {
         # are we a roaming user?
         local agrp item mwhy
         if [ "$EUID" \< 10000 ] ; then           # id < 10000 cannot be roaming
-            mwhy="UID < 1000"
+            mwhy='UID < 1000'
         else
             mwhy=$"not a member of group 'roaming'"
             system -a agrp -d " \t" -e -p -r -- id -Gn
@@ -519,6 +526,13 @@ actionLogin() {
 
     # setup folders
     actionRoaming
+
+    # pending issue?
+    if [ -d "$DAT_ISSUE_DIR" ] ; then
+        context -g 1
+        confirm -y $"There is at least one pending issue, handle it now?" &&
+            embed centaurisysinit issue test -
+    fi
 
     # get kerberos ticket
     [ -x "$CEN_TOOLS/centaurikerberos" -a -e "/etc/krb5.conf" ] &&

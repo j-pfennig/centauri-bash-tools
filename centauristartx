@@ -40,6 +40,26 @@ DAT_CFG_XRES=
 DAT_DPI_INFO=('pc 0 96'  'sd 1300 104'  'hd 1900 141'   '4k 2600 172')
 
 # ------------------------------------------------------------------------------
+# don't switch away for issue screen
+# ------------------------------------------------------------------------------
+# The centauriissue service will display something on console #8. This function
+# stops plymouth-quit-wait to prevent a wait dependency loop and also defers the
+# start of a display manager, which would switch away from console #8.
+# ------------------------------------------------------------------------------
+has_issue() {
+    [ -d "$CEN_ROOT/persistent/issue.d" ] || return 0
+    message -a "Waiting for 'centauriissue' service"
+    runservice -v stop 'plymouth-quit-wait'
+    local maxw=30
+    while [ "$maxw" -gt 0 ] ; do
+        ((maxw -= 1)) ; timer -w 2
+        [ -d "$CEN_ROOT/persistent/issue.d" ] || return 0
+    done
+    message -a "Wait timeout, starting display manager"
+    return 1
+}
+
+# ------------------------------------------------------------------------------
 # Check for display (wait if CEN_OPT_NOWAIT is empty)
 # ------------------------------------------------------------------------------
 has_display() {
@@ -105,10 +125,10 @@ has_display() {
                 trace -a $"Display not connected" ; return 1
             fi
             if [ -n "$wmax" ] ; then
-                wmax=$((wmax - 1))
+                ((wmax -= 1))
                 message -a -p $"Display not connected, waiting %s" "$wtim [s]"
             fi
-            sleep "$wtim"
+            timer -w "$wtim"
         done
         return 1
     }
@@ -119,8 +139,7 @@ has_display() {
     ___wait_loop 2  8 && return 0
     [ -n "$CEN_OPT_NOWAIT" ] && return 5
     message -a $"Display not connected, waiting..."
-    ___wait_loop 5 && return 0
-    return 5
+    ___wait_loop 5 && return 0 || return 5
 }
 
 # ------------------------------------------------------------------------------
@@ -426,6 +445,7 @@ run_startx() {
 # Start a display manager: <prog>
 # ------------------------------------------------------------------------------
 run_displaymgr() {
+    has_issue                               # wait until finished
     case "$1" in
     auto)   system -c 'sddm' && set -- 'sddm' || set -- 'lightdm'
             ;;

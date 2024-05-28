@@ -16,6 +16,16 @@ CEN_OPT_NOCHECK=            # see --nocheck
 CEN_OPT_ROOT=               # see --root
 
 DAT_UPDTHOOK="/etc/initramfs/post-update.d/$CEN_NAME"
+DAT_ASK_QUIT=
+
+# ------------------------------------------------------------------------------
+# ask once to quit: <confirm arguments>
+# ------------------------------------------------------------------------------
+do_ask_quit() {
+    [ -n "$DAT_ASK_QUIT" ] && return
+    confirm "$@" || quit -t
+    DAT_ASK_QUIT=1
+}
 
 # ------------------------------------------------------------------------------
 # find text file:   <vnam> <prefix> <fragment>
@@ -237,21 +247,43 @@ actionCopy() {
 }
 
 # ------------------------------------------------------------------------------
-# config entry: <name>|- [<root>|-] [splash|nosplash|- [<cpar>...]]
+# config entry: <name>|- [<root>|- [splash|nosplash|- [<cpar>...|-]]]
 # ------------------------------------------------------------------------------
 actionEntry() {
-    do_folder -n
+    # auto-generate default entries ...
+    if [ "$1" = '-' ] ; then
+        local name args
+        shift ; name="${1:--}" ; [ "$name" = '-' ] && set -- '+' "${@:2}"
+        args=("$@") ; args[1]='splash'
+        actionEntry 'default' "${args[@]}"
+        netquery 'server' "$CEN_OPT_HOST" && actionEntry 'server' "${args[@]}"
+        [ -e '/home/local/.autologin' ] && actionEntry 'bootmenu' "${args[@]}"
+        args[1]='nosplash'
+        for name in 'router' 'repeater' 'switch' 'extender' ; do
+            netoption "$name" "$CEN_OPT_HOST" && actionEntry "$name" "${args[@]}"
+        done
+        message -a "Created 'cmdline-<name>.txt' entries in '/boot/firmware'"
+        return
+    fi
 
+    # create a single entry
+
+    do_folder -n
     local line name="$1" ramd args=("root=${2:-+}") ; shift ; shift
 
     if [ "$args" = 'root=-' ] ; then                # generate no root=
+        do_ask_quit "Not creating a 'root=' boot parameter. Really continue"
         args=()
-    elif [ "$args" = 'root=+' ] ; then              # generate default
-        if [ -d '/mnt/vol0/Volumes/Root' ] ; then
-            args=("root=LABEL=${CEN_OPT_HOST}_vol0")
+    elif [ "$args" = 'root=+' ] ; then              # autodetect root
+        local fsty
+        if [ -b "/dev/disk/by-label/${CEN_OPT_HOST}_vol0" ] ; then
+            fsty='btrfs' ; args=("root=LABEL=${CEN_OPT_HOST}_vol0")
+        elif [ -b "/dev/disk/by-label/${CEN_OPT_HOST}_root" ] ; then
+            fsty='ext4' ; args=("root=LABEL=${CEN_OPT_HOST}_root")
         else
-            args=("root=LABEL=${CEN_OPT_HOST}_root")
+            invoke -e "Cannot autotdetect root, please specify as argument" ; return
         fi
+        do_ask_quit -f "Booting '%s' from '%s' filesystem. Continue" "$CEN_OPT_HOST" "$fsty"
     fi
 
     if [[ "$args" =~ LABEL=.*_vol[0-9] ]] ; then    # btrfs config
@@ -260,7 +292,9 @@ actionEntry() {
             args+=(initrd=0) ; ramd=1
         fi
     elif [ -n "$args" ] ; then                      # ext4 config
-        args+=(fsck.repair=yes)
+
+ #### TODO always ...
+        args+=('fsck.repair=yes')
     fi
 
     case "${1:-splash}" in
@@ -273,35 +307,34 @@ actionEntry() {
     esac
     shift
 
-    case "$name" in
-    bootmenu)
-        args+=(centauriswitch=smart centaurilogin=local systemd.unit=runlevel2.target) ;;
+    # add default arguments
+
+    [ $# = 0 ] && case "$name" in
     default|workstation)
         args+=(centauriswitch=smart systemd.unit=graphical.target) ;;
     minimal)
         args+=(systemd.unit=runlevel2.target) ;;
-    server|apoint)                                      # wlan does no wds
+    server)
+        args+=(centauriswitch=static systemd.unit=graphical.target) ;;
+    apoint)                                             # wlan does no wds
         args+=(centauriswitch=static:apoint systemd.unit=graphical.target) ;;
     router)
         args+=(centauriswitch=router systemd.unit=runlevel3.target) ;;
-    switch|extender)                                    # wlan does no wds
-        args+=(centauriswitch=switch:extender systemd.unit=runlevel2.target) ;;
     repeater)
-        args+=(centauriswitch=router:repeater systemd.unit=runlevel2.target) ;;
-    -)  actionEntry 'default'
-        netquery 'server' && actionEntry 'server'
-        [ -e '/home/local/.autologin' ] && actionEntry 'bootmenu'
-        for name in 'router' 'repeater' 'extender' ; do
-            actionEntry "$name"
-        done ;;
+        args+=(centauriswitch=router:repeater systemd.unit=runlevel3.target) ;;
+    switch)
+        args+=(centauriswitch=switch systemd.unit=runlevel3.target) ;;
+    extender)                                           # wlan does no wds
+        args+=(centauriswitch=switch:extender systemd.unit=runlevel3.target) ;;
+    bootmenu)
+        args+=(centauriswitch=disabled systemd.unit=runlevel3.target centaurilogin=local) ;;
     esac
-    do_name name "$name"                                # simplify entry name
 
+    do_name name "$name"                                # simplify entry name
     args+=("$@") ; line="${args[*]}"
     create -t -v line -- "cmdline-$name.txt"
 
     # create default files and a config file
-
     local cmdf='cmdline-default.txt'
     [ -e "$cmdf" ] || copy -- 'cmdline.txt' "$cmdf"
     local conf='config-default.txt'

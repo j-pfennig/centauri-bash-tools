@@ -5,7 +5,7 @@ CEN_TITLE=$"Installer tool for centauri-soho linux machines"
 
 # Import the bash library
 if [ -z "$CEN_NAME" ] ; then
-    PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m con -y - '0.11:2' || exit 2
+    PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m con -y - '0.12:2' || exit 2
 fi
 
 # Variable naming
@@ -15,13 +15,16 @@ fi
 #   DAT_                        # the setup script
 #   SOHO_                       # setup.conf
 
+SOHO_WORKSPACE=                 # see get_base and --base
+SOHO_DISTRO=                    # debian distribution
+SOHO_LOCKED=                    # configured domain, host, ip, server
+
 # Shared with 'setup' script:
 SOHO_APT_PROXY=
 SOHO_CONFIG=                    # name of the size configuration
-SOHO_DISTRO=                    # debian distribution
 SOHO_DOMAIN=                    # domain name
 SOHO_DOMUSR=                    # a domain test user
-SOHO_ROUTERS=
+SOHO_ROUTERS=                   # router list, 1st is generic router name
 SOHO_NET_APNT=                  # WLAN SSID for host access point(s)
 SOHO_NET_BASE=                  # base network
 SOHO_NET_PUBLIC=
@@ -34,10 +37,9 @@ SOHO_PW_WLAN=                   # override WLAN passwd
 SOHO_REPO_OPTS=                 # repository OPTIONS
 SOHO_SONAME=                    # soho default machine name prefix
 SOHO_HONAME=                    #
-SOHO_GENAME=                    #
+SOHO_GENAME=                    # generic server name
 SOHO_SWAP_SIZE=
 SOHO_PLATFORM=                  # usally set by get_architecture
-SOHO_WORKSPACE=                 # see get_base and --base
 
 # Data
 CEN_OPT_BASE=                   # base folder, see --base
@@ -53,12 +55,10 @@ DAT_SOHO_SEED=                  # abs path of seed.tgz
 DAT_SOHO_SUB=                   # see actionTemplate
 DAT_SOHO_DTAR=                  # Distributable tar file
 
-#### TODO #### remove 'everything'
-#### TODO #### fix get_dist
-
 DAT_SEED='seed.tgz'             # the seed tar
 DAT_NOT_LAST=                   # true if not last command
 DAT_GOT_CONF=                   # flag that setup.conf is loaded
+DAT_KB_LAYOUT=                  # see cfg_keyboard
 
 # imported
 declare DAT_REPOSITORY DAT_RASPI
@@ -68,13 +68,59 @@ declare DAT_REPOSITORY DAT_RASPI
 # ------------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------
-# handle configuration parameters: -r|-w|-q [<file>]
+# handle configuration parameters: -q|-r|-w [<file>]
+#                                  -p [<file> <wrks>]
+#
+#       -p      patch setup.conf with current parameters
+#       -r      read only
+#       -q      query prompt user for parameters
+#       -t      read parameters from centaurisoho config file
+#       -w      write parameters to config file
 # ------------------------------------------------------------------------------
 cfg_params() {
     # get parameter file path ...
     local file="$2"
     if [ -z "$file" ] ; then
         configfile -p -q && file="$CEN_CONFIGFILE" || file="$HOME/.local/$CEN_NAME"
+    fi
+
+    # patch password file...
+    if [ "$1" = '-p' ] ; then
+        [ -z "$2" -o -z "$3" ] && fatal -t 'option -p needs <file> <wrks>'
+        local stab item
+        item="$3/passwords"
+        stab="s/^wlanpsk=.*/wlanpsk=${SOHO_NET_WLAN_PW@Q}/"
+        if [ -f "$item" ] ; then
+            system -e -p sed --regexp-extended --in-place=".$CEN_NAME" -e "$stab" "$item"
+        else
+            warning "Missing password file:" "$3"
+        fi
+        return 0
+
+     # prompt for parameters...
+     elif [ "$1" = '-q' ] ; then
+        local pent="<please enter>" sodo netb
+        cfg_keyboard -q
+        get_value SOHO_DOMAIN         'soho.home'     -  "Domain name  (updates certs)"
+        get_value SOHO_NET_PUBLIC     -         "$pent"  "External DNS (- for none)"
+        sodo="${SOHO_DOMAIN%%.*}"
+        get_value SOHO_SONAME         "$sodo"         -  "Default machine name prefix"
+        get_value SOHO_SERVER         "$SOHO_SONAME"1 -  "Primary server name"
+
+        get_value SOHO_NET_BASE       '10.10.0.0/21'  -  "Network IPv4 address and mask"
+        get_value SOHO_NET_ROUTER_DEF 'router'        -  "Primary router name"
+        netb="${SOHO_NET_BASE%.*}" ; netb="${netb%.*}.1.1"
+        get_value SOHO_NET_ROUTER_IP4 "$netb"         -  "Primary router IPv4 address"
+
+        get_value SOHO_NET_WLAN       "$sodo"         -  "WLAN client SSID  (- to disable)"
+        get_value SOHO_NET_APNT       "$sodo-ap"      -  "WLAN AP SSID      (- to disable)"
+        if [ "$SOHO_NET_WLAN" != '-' -o "$SOHO_NET_APNT" != '-' ] ; then
+            [ "$SOHO_NET_WLAN" = "$SOHO_NET_APNT" ] &&
+                fatal "SSIDs of WLAN client and WLAN AP must not be equal"
+            get_value SOHO_NET_WLAN_PW -        "$pent"  "WLAN password     (- for random)"
+        fi
+        : "${SOHO_NET_PUBLIC:=-}" "${SOHO_NET_WLAN_PW:=-}"
+    return 0
     fi
 
     # read parameter file ...
@@ -89,8 +135,14 @@ cfg_params() {
         fi
     fi
 
+    # write config file ...
     if [ "$1" = '-w' ] ; then
-        local item curr list=(
+        local item curr list idnt
+        if [ "$file" = '-' ] ; then
+            message -m "Current parameter values..." ''
+            idnt="${CEN_NAME//?/ }      "
+        else
+            list=(
             "# '${file##*/}' is a parameter file used by centaurisoho."
             "#"
             "# Purpose #1: it remembers the current workspace path, distro and config"
@@ -98,43 +150,152 @@ cfg_params() {
             "#"
             "# There is little reason to edit this file except for purpose #2."
             ""
-        )
-        for item in SOHO_WORKSPACE SOHO_DISTRO SOHO_CONFIG - SOHO_DOMAIN SOHO_SONAME \
-                    SOHO_SERVER - SOHO_NET_PUBLIC SOHO_NET_BASE SOHO_NET_ROUTER_DEF \
-                    SOHO_NET_ROUTER_IP4 SOHO_NET_WLAN SOHO_NET_APNT SOHO_NET_WLAN_PW ; do
+            )
+        fi
+        for item in SOHO_WORKSPACE SOHO_DISTRO SOHO_CONFIG SOHO_HOST - \
+                    SOHO_DOMAIN SOHO_SONAME SOHO_SERVER - SOHO_NET_PUBLIC \
+                    SOHO_NET_BASE SOHO_NET_ROUTER_DEF SOHO_NET_ROUTER_IP4 \
+                    SOHO_NET_WLAN SOHO_NET_APNT SOHO_NET_WLAN_PW ; do
             if [ "$item" = '-' ] ; then
                 list+=('') ; continue
             fi
             eval curr=\"\$$item\" ; curr="${curr@A}"
-            list+=("$item=${curr#*=}")
+            list+=("$idnt$item=${curr#*=}")
         done
-        list+=('' '# end')
-        create -t -v list -- "$file" || return 1
-
-     elif [ "$1" = '-q' ] ; then
-        local pent="<please enter>" sodo
-        get_value SOHO_DOMAIN         'soho.home'     -  "Domain name  (updates certs)"
-        get_value SOHO_NET_PUBLIC     -         "$pent"  "External DNS (- for none)"
-        sodo="${SOHO_DOMAIN%%.*}"
-        get_value SOHO_SONAME         "$sodo"         -  "Default machine name prefix"
-        get_value SOHO_SERVER         "$SOHO_SONAME"1 -  "Primary server name"
-
-        get_value SOHO_NET_BASE       '10.10.0.0/21'  -  "Network IPv4 address and mask"
-        get_value SOHO_NET_ROUTER_DEF 'router'        -  "Primary router name"
-        sodo="${SOHO_NET_BASE%.*}" ; sodo="${sodo%.*}.1.1"
-        get_value SOHO_NET_ROUTER_IP4 "$sodo"         -  "Primary router IPv4 address"
-
-        sodo="${SOHO_DOMAIN^}"
-        get_value SOHO_NET_WLAN       "$sodo"         -  "WLAN client SSID  (- to disable)"
-        get_value SOHO_NET_APNT       "$sodo-ap"      -  "WLAN AP SSID      (- to disable)"
-        if [ "$SOHO_NET_WLAN" != '-' -o "$SOHO_NET_APNT" != '-' ] ; then
-            [ "$SOHO_NET_WLAN" = "$SOHO_NET_APNT" ] &&
-                fatal "SSIDs of WLAN client and WLAN AP must not be equal"
-            get_value SOHO_NET_WLAN_PW -        "$pent"  "WLAN password     (- for random)"
+        if [ "$file" = '-' ] ; then
+            list+=('')
+        else
+            list+=('' '# end')
         fi
-        : "${SOHO_NET_PUBLIC:=-}" "${SOHO_NET_WLAN_PW:=-}"
+        create -t -v list -- "$file" || return 1
+        cfg_keyboard -w -
      fi
      return 0
+}
+
+# ------------------------------------------------------------------------------
+# Config keyboard layout for minimal host: [-q|-u] <dest>
+# ------------------------------------------------------------------------------
+#       -q      query
+#       -u      update destination
+#
+# Using debian's '/etc/default/keyboard' file. Copy local file if present.
+# ------------------------------------------------------------------------------
+cfg_keyboard() {
+    [ "${2:--}" = '-' ] && return 1                 # do nothing on current host
+                                                    # run only without centauritools
+    [ -s "$dest/var/centauri/tools/_centauri_bash_lib" ] && return 0
+
+    local dest="$2" keyb='/etc/default/keyboard' dflt="<copy current>" dval='-'
+
+    if [ "$1" = '-q' ] ; then
+        # do we have a local debian Keyboard config?
+        [ -s "$keyb" ] || { dflt='us' ; dval="$dflt" ; }
+        get_value DAT_KB_LAYOUT "$dval" "$dflt" "Keyboard layout (fr,de,us,...)"
+        return 0
+    elif [ "$1" != '-u' ] ; then
+        return 1
+    fi
+
+    if [ "$DAT_KB_LAYOUT" = '-' ] ; then
+        :
+    elif [ -z "$DAT_KB_LAYOUT" ] && [ -s "$keyb" ] ; then
+        copy -- "$keyb" "$dest" || return 1
+    else
+        create -t -h - -- "$dest$keyb" <<!EOF
+XKBMODEL="pc105"
+XKBLAYOUT="$DAT_KB_LAYOUT"
+XKBVARIANT=""
+XKBOPTIONS=""
+BACKSPACE="guess"
+!EOF
+    fi
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# apply configuration: <dest>|- <name>|- <para>|-
+# ------------------------------------------------------------------------------
+#   Where to get centaurisoho parameters:
+#   (1) <para> file argument
+#   (2) <dest>/etc/default/centaurisoho
+#   (3) /etc/default/centaurisoho
+#
+#   <dest>  mountpoint of root-fs or '-' for this machine
+#   <name>  machine name or '-' for $HOSTNAME
+#   <para>  '' to query  '-' no params  <file> param file
+# ------------------------------------------------------------------------------
+cfg_apply() {
+    local dest="${1:--}" name="${2:--}" para="$3"
+    local list wrks tmpl dcfg='/etc/default/centaurisoho'
+
+    if  [ "$dest" = '-' ] ; then
+        get_yesno -y "Update configuration of local host" || quit -a -u
+        [ "$name" = '-' ] && name="$HOSTNAME"
+        wrks="$SOHO_WORKSPACE" ; dest='/'
+    else
+        # install to an image? Get workspace and params  ...
+        [ -d "$dest/boot" -a -d "$dest/usr" ] || dest+='/Volumes/Root'
+        dcfg="$dest$dcfg"
+        inpdata -a list -q -r -- "$dcfg"
+        txtgrep -s wrks -i list -m -y 'SOHO_WORKSPACE=*'
+        wrks="${wrks#*=}" ; wrks="${wrks#[\'\"]}" ; wrks="${wrks%[\'\"]}"
+        if [ -n "$wrks" ] && [ -d "$dest$wrks" ] ; then
+            wrks="$dest$wrks"
+        else
+            wrks="$SOHO_WORKSPACE"
+        fi
+        trace -a -c "dest workspace" "$wrks"
+        if [ -s "$dcfg" ] ; then
+            cfg_params -r "$dcfg" || return 1
+            get_setup -n || return 1                # complete and validate only
+        fi
+        if [ "$name" = '-' ] ; then
+            invoke -e "Configuration needs a hostname" ; return 1
+        fi
+       get_yesno -y "Update configuration of '%s'" "$name" || quit -a -u
+    fi
+
+    case "$para" in
+    '')     cfg_params -q || return 1 ;;
+    -)      ;;
+    *)      cfg_params -r "$para" || return 1
+    esac
+    get_yesno -n "Apply configuration" || quit -a -u
+    cfg_params -w "$dcfg"
+    cfg_params -p "$dcfg" "$wrks"
+
+# BUG: primary server0
+# BUG: params after dom name change
+# BUG: generic hosts rename
+
+    tmpl="$wrks/templates"
+    if [ ! -d "$tmpl" ] ; then
+        invoke -e "Cannot locate a template folder" ; return 1
+    fi
+    for item in "$tmpl/$name"/*.TEMPLATE "$tmpl/@shared"/* ; do
+        [ -s "$item" ] || continue
+        [ "${item##*/}" = 'a_boot_grub+grub.cfg.TEMPLATE' ] && continue
+        copyFromTemplate "$item" "$dest"
+    done
+
+    ___wlan_config() {
+        [ "${SOHO_NET_WLAN:--}" = '-' ] || set -- "$@" --wlan   "$SOHO_NET_WLAN:$SOHO_NET_WLAN_PW"
+        [ "${SOHO_NET_APNT:--}" = '-' ] || set -- "$@" --apoint "$SOHO_NET_APNT:$SOHO_NET_WLAN_PW"
+        embed -v 'centaurinetgen' "$@" --host="$name" nmcon -- wpasup -- hostapd
+    }
+
+    if [ "$dest" = '/' ] ; then
+        embed -v centaurinetcfg setup "$name"
+        ___wlan_config
+    else
+        item="$PWD" ; folder -c -f -- "$dest"
+        embed -v centaurinetcfg --conf="etc/default/centaurinetcfg" --out=. setup "$name"
+        ___wlan_config '--out=.'
+        folder -c -f "$item"
+        DAT_GOT_CONF=
+    fi
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -159,19 +320,21 @@ get_architecture() {
 }
 
 # ------------------------------------------------------------------------------
-# get base folder, check seed (unless -f|-n is used): [-f|-n]
+# get base folder, check seed (unless -f|-n is used): [-f|-n|-q|-w]
 # ------------------------------------------------------------------------------
 # Options:      -n  do not check seed, do not change working dir
 #               -q  like -n but no error messages
 #               -f  do not check seed
+#               -w  just get workspace, do not change working dir
 # ------------------------------------------------------------------------------
 get_base() {
+    local nmsg ; [ "$1" = '-q' -o "$1" = '-w' ] && nmsg=1
     if [ -n "$SOHO_WORKSPACE" ] ; then              # previous call
-        [ "$1" = '-n' -o  "$1" = '-q' ] && return 0 # dont change folder
+        [ "$1" = '-n' -o -n "$nmsg" ] && return 0   # dont change folder
         folder -f -c -- "$SOHO_WORKSPACE" ; return 0
     fi
 
-    cfg_params # -r || return 1
+    cfg_params -r #### || return 1
     local updt curr="$SOHO_WORKSPACE:$SOHO_DISTRO:$SOHO_CONFIG"
 
     [ -n "$CEN_OPT_BASE" ] && SOHO_WORKSPACE="$CEN_OPT_BASE"
@@ -180,12 +343,14 @@ get_base() {
     if [ -z "$SOHO_WORKSPACE" ] ; then
         [ "$1" = '-q' ] && return 1
         quit -e "No known workspace, use option '--base=<fldr>'"
-    elif [ -z "$SOHO_DISTRO" -o -z "$SOHO_CONFIG" ] ; then
-        [ "$1" = '-q' ] && return 1
-        quit -e "No configuration info, use option '--current=<dist>:<inst>'"
     elif [ ! -d "$SOHO_WORKSPACE/dists" ] ; then
         [ "$1" = '-q' ] && return 1
         quit -e "Not a valid workspace" "$SOHO_WORKSPACE"
+    elif [ "$1" = '-w' ] ; then
+        return 0
+    elif [ -z "$SOHO_DISTRO" -o -z "$SOHO_CONFIG" ] ; then
+        [ "$1" = '-q' ] && return 1
+        quit -e "No configuration info, use option '--current=<dist>:<inst>'"
     fi
 
     [ "$curr" = "$SOHO_WORKSPACE:$SOHO_DISTRO:$SOHO_CONFIG" ] || updt="   update"
@@ -193,7 +358,7 @@ get_base() {
 
     [ -n "$updt" ] && cfg_params -w                 # update params
 
-    [ "$1" = '-n' -o  "$1" = '-q' ] && return 0     # dont change folder
+    [ "$1" = '-n' -o "$1" = '-q' ] && return 0      # dont change folder
     folder -f -c -- "$SOHO_WORKSPACE"
     [ "$1" = '-f' ] && return 0                     # no seed check
 
@@ -232,21 +397,69 @@ get_dist() {
     return 0
 }
 
-# -d decorate
-# -u undo -d decoration
+# check network base: [-w] <base>
+get_network() {
+    local merr='error'
+    [ "$1" = '-w' ] && { merr='warning -a' ; shift ; }
+    CEN_NET_NETWORKS=()
+    if ! netparse -a -b -- "$1" ; then
+        $merr "Network base has invalid syntax" ; return 1
+    elif [ "$_netparse_bits" -lt 10 ] ; then
+        $merr "Network mask bits value must be >= 10" ; return 1
+    elif [ "$_netparse_bits" -gt 22 ] ; then
+        $merr "Network mask bits value must be <= 22" ; return 1
+    fi
+    netconv -b "$_netparse_addr"
+    local abin="${_netconv:--1}"                # address as binary
+    netconv -b "${_netparse_mask:-0}"           # mask as binary
+                                                # get allow offset bits ...
+    local mask=$(( (1<<(32 - _netparse_bits)) - 1 ))
+    ((mask &= ~255)) ; ((mask += _netconv))     # lower 8 bit must be 0
+    message -p "offset mask %x %x %x" "$mask" "$_netconv" "$abin" #
+    if [ "$((abin & ~mask))" != 0 ] ; then
+        $merr "Network mask or network base ip address are invalid" ; return 1
+    fi
+
+    CEN_NET_NETBITS="$_netparse_bits"
+    CEN_NET_NETMASK="$_netparse_mask" ; _netparse_addr="${_netparse_addr%.*}"
+    CEN_NET_NETWORKS=("$1")
+    netparse '<0>0.0'   ; CEN_NET_NETWORKS+=("$_netparse_addr/25")
+    netparse '<0>0.128' ; CEN_NET_NETWORKS+=("$_netparse_addr/25")
+    netparse '<0>1.0'   ; CEN_NET_NETWORKS+=("$_netparse_addr/24")
+    netparse '<0>2.0'   ; CEN_NET_NETWORKS+=("$_netparse_addr/24")
+    netparse '<0>3.0'   ; CEN_NET_NETWORKS+=("$_netparse_addr/25")
+    netparse '<0>3.128' ; CEN_NET_NETWORKS+=("$_netparse_addr/25")
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# convert repository file name: -d|-u <name> <vnam>
+# ------------------------------------------------------------------------------
+#   -d decorate
+#   -u undo '-d' decoration
+# ------------------------------------------------------------------------------
 get_path() {
-    local mode="$1" sinp="${2#*/?_}"
-    case "$mode" in
-    -u)     sout="${sinp//_/\/}" ; sout="${sout/+/\/}" ;;
-    *)      fatal -t '?' "$mode"
+    local _sout _sinp _spat
+    case "$1" in
+    -d)     _spat="${2%/*}" ; _sinp="${2##*/}"
+            _spat="${_spat//_/°}"
+            _sout="${_spat//\//_}+$_sinp"
+            ;;
+    -u)     _spat="${2%+*}" ; _sinp="${2##*+}"
+            _spat="${_spat#*/?_}" ; _spat="${_spat#_}"
+            _spat="${_spat//_/\/}" ; _spat="${_spat//°/_}"
+            _sout="$_spat/$_sinp" ; [ "${_sout::1}" = '/' ] || _sout="/$_sout"
+            ;;
+    *)      fatal -t '?' "$1"
     esac
-    printf -v "$3" '/%s' "$sout"
+    printf -v "$3" '%s' "$_sout"
 }
 
 # ------------------------------------------------------------------------------
 # load configuration and the setup plugin: [-c]
 # ------------------------------------------------------------------------------
 #   Options:    -c      use 'setup --config' (don't load plugin code)
+#               -n      no init, don't call 'setup' at all
 #
 #   Get network config, derive from 'setup.conf' if needed:
 #       --netcfg=2      use centaurinetcfg if it exists and HOSTNAME != SOHO_ORIGIN
@@ -254,10 +467,12 @@ get_path() {
 #       --netcfg=1      always use 'centaurinetcfg', fatal if not existing
 # ------------------------------------------------------------------------------
 get_setup() {
-    local oset='source' abin
+    local oset='source'
     [ "$1" = '-c' ] && oset='config'
 
-    if [ "$SOHO_SETUP" = 1 ] ; then                 # sourced before
+    if [ "$1" = '-n' ] ; then                       # no 'setup'
+        DAT_GOT_CONF= ; SOHO_SETUP=                 # config/setup now invalid
+    elif [ "$SOHO_SETUP" = 1 ] ; then               # sourced before
         :
     elif [ ! -x "$SOHO_WORKSPACE/setup" ] ; then
         invoke -e "Missing 'setup' script" ; return 1
@@ -282,36 +497,16 @@ get_setup() {
         esac
         return 0
     }
-    configfile -l ___pwentry -n './passwords' || return 1
-    if [ "${SOHO_PW_ROOT:--}" = '-' ] ; then
-        error "No password for 'root' (see SOHO_PW_ROOT)" ; return 1
-    elif [ "${SOHO_PW_LOCAL:--}" = '-' ] ; then
-        error "No password for 'local' (see SOHO_PW_LOCAL)" ; return 1
-    fi
+
+    # last chance defaults, centaurinetcfg needs these...
+    : ${SOHO_GENAME:=server}
+    : ${SOHO_ROUTERS:=router}
 
     # the setup script sets SOHO_xxxx data, add CEN_NET_xxx here
     CEN_NET_DOMAIN="$SOHO_DOMAIN"
-    netparse -a -b -- "$SOHO_NET_BASE" || return 1
-    if [ "${_netparse_bits:-0}" -lt 10 ] ; then
-        error "Network mask bits value must be >= 10" ; return 1
-    fi
-    netconv -b "$_netparse_addr"
-    abin="${_netconv:--1}"
-    netconv -b "${_netparse_mask:-0}"
-    if [ "$((abin & ~_netconv))" != 0 ] ; then
-        error "Network mask or network base ip address are invalid" ; return 1
-    fi
-    CEN_NET_NETBITS="$_netparse_bits"
-    CEN_NET_NETMASK="$_netparse_mask" ; _netparse_addr="${_netparse_addr%.*}"
     CEN_NET_SERVER_GEN="$SOHO_GENAME"
     CEN_NET_SERVERS=("$SOHO_SERVER" "$SOHO_SECOND")
-    CEN_NET_NETWORKS=("$SOHO_NET_BASE")
-    netparse '<0>0.0'   ; CEN_NET_NETWORKS+=("$_netparse_addr/25")
-    netparse '<0>0.128' ; CEN_NET_NETWORKS+=("$_netparse_addr/25")
-    netparse '<0>1.0'   ; CEN_NET_NETWORKS+=("$_netparse_addr/24")
-    netparse '<0>2.0'   ; CEN_NET_NETWORKS+=("$_netparse_addr/24")
-    netparse '<0>3.0'   ; CEN_NET_NETWORKS+=("$_netparse_addr/25")
-    netparse '<0>3.128' ; CEN_NET_NETWORKS+=("$_netparse_addr/25")
+    get_network "$SOHO_NET_BASE" || return 1
 
     : ${SOHO_ROUTERS:='router'}
     set -f ; set -- $SOHO_ROUTERS ; set +f
@@ -320,12 +515,21 @@ get_setup() {
 
     CEN_NET_ADDR_IPLIST=("10.255.255.1")
 
+    # option -c or -n stop here
+    [ "$oset" = 'config' -o -z "$DAT_GOT_CONF" ] && return 0
+
+    configfile -l ___pwentry -n './passwords' || return 1
+    if [ "${SOHO_PW_ROOT:--}" = '-' ] ; then
+        error "No password for 'root' (see SOHO_PW_ROOT)" ; return 1
+    elif [ "${SOHO_PW_LOCAL:--}" = '-' ] ; then
+        error "No password for 'local' (see SOHO_PW_LOCAL)" ; return 1
+    fi
+
     case "$CEN_OPT_NETCFG" in
     0)  return 0 ;;
     1)  ;;
     *)  [ "$HOSTNAME" == "$SOHO_ORIGIN" ] && return 0
     esac
-    [ "$oset" = 'config' ] && return 0
 
     trace "Trying to load cached 'centaurinetcfg'"
     CEN_NET_DOMAIN=
@@ -372,13 +576,14 @@ get_update() {
         walk -r -b -l 1 -- "$item"
         list=()
         for file in "${CEN_WALK_FILES[@]}" ; do
+            [ "${file%/_centauri_bash_dyn}" = "$file" ] || continue
             file="${file#.}"
             if [ -e "$file" ] ; then
                 list+=("$file")
             elif [ -h "$file" ] ; then
                 list+=("$file")
             else
-                trace -a -c "Missing file" "$file"
+                trace -a -c "File not in repo" "${file#$CEN_ROOT/}"
                 ((miss += 1))
             fi
         done
@@ -387,8 +592,10 @@ get_update() {
         system -f -p -- cp -a "${list[@]}" "$dest/${item#./}"
         ((coun += ${#list[@]}))
     done
+    file="$dest/var/centauri/library"
+    embed -i -v "$file/autoload" -B -P "$dest/var/centauri/library"
     folder -c -f "$curr"
-    message -a -p "Updated %s folders, %s items, %s missing" "${#dirs[@]}" "$coun" "$miss"
+    message -a -p "Updated %s folders, %s items, %s not in repository" "${#dirs[@]}" "$coun" "$miss"
 }
 
 # ------------------------------------------------------------------------------
@@ -404,14 +611,39 @@ get_value() {
     [ "$_prom" = '-' -o "${_dflt:--}" != '-' ] && _prom="$_dflt"
 
     printf -v _text '%s%%s[%s]' "$4" "$_prom"
-    local _leng="                                                      "
+    local _leng="                                                        "
     local _fill=$((${#_leng} - ${#_text}))
     [ "$_fill" -lt 1 ] && _fill=1
     printf -v _text "$_text" "${_leng::_fill}"
-    confirm -a -f -p - "$_text"
 
-    [ -z "$CEN_CONFIRM" ] && CEN_CONFIRM="$_dflt"
+    while : ; do
+        confirm -a -f -p - "$_text"
+        [ -z "$CEN_CONFIRM" ] && CEN_CONFIRM="$_dflt"
+        # input validation
+        case "$1" in
+            SOHO_NET_BASE)
+                get_network "$CEN_CONFIRM" && break
+                ;;
+            SOHO_NET_WLAN_PW)
+                [ "${#CEN_CONFIRM}" -ge 8 ] && break
+                error $"Minimum password length is 8 chars"
+                ;;
+            SOHO_NET_ROUTER_IP4)
+                netparse -e -a -- "$CEN_CONFIRM" && break
+                ;;
+            *)
+                break ;;
+        esac
+    done
+    error -c
     printf -v "$1" '%s' "$CEN_CONFIRM"
+}
+
+# confirm y/n in same format as get_value
+get_yesno() {
+    local text yopt="$1" ; shift
+    [ $# -gt 1 ] && printf -v text "$@" || text="$1"
+    confirm $yopt -f "%-48s" "$text"
 }
 
 # ------------------------------------------------------------------------------
@@ -461,7 +693,7 @@ actionBackup() {
     fi
 
     if [ -d "$mptr/mnt/vol0" -a ! -d "$mptr/Volumes/Root" ] ; then
-        confirm -n "Mount option 'subvol=/' might be missing. Continue" || quit -a -t
+        confirm -n "Mount option 'subvol=/' might be missing. Continue" || quit -a -u
     fi
 
     for item in 'boot' 'root' 'usr' 'home' 'shared' ; do
@@ -519,19 +751,19 @@ actionBackup() {
         fi
 
         # copy imagetool and create imagetool.xy
-        local imag="$SOHO_WORKSPACE/imagetool"
-        if [ -s "$imag" ] ; then
-            embed -z -v -i -- "$imag" archive .
-            system -e -p -- cp -a -u -L -- "$imag" .
+        local tool="$SOHO_WORKSPACE/dists/@tools"
+        if [ -s "$tool/imagetool" ] ; then
+            embed -z -v -i -- "$tool/imagetool" archive "$PWD"
+            system -e -p -- cp -a -u -- "$tool/imagetool"* "$tool/grub.minimal" .
             system -e -p -- cp -a -u "$DAT_SOHO_PARAMS" 'imagetool.params'
         else
-            warning "Missing file:" "$imag"
+            warning "Missing file:" "$tool/imagetool"
         fi
 
         # volf, item can be void and must not be quoted
-        if system -t -e -p -- tar -cf "$file" imagetool* $volf $item ; then
+        if system -t -e -p -- tar -cf "$file" imagetool* grub.minimal $volf $item ; then
             confirm -a -y "Dist tar created, remove constituent tars" &&
-                remove -- $volf $item imagetool*
+                remove -- $volf $item imagetool* grub.minimal
         fi
     fi
 
@@ -539,25 +771,66 @@ actionBackup() {
 }
 
 # ------------------------------------------------------------------------------
-# Create repository 'centaurinetcfg' from 'setup.conf' and template: -no args-
+# Get configuration from templates: [network|query|show|update] <mpnt> <name> <para>
+# ------------------------------------------------------------------------------
+#
+#       query
+#       query <dest> <name> <para>
+# network:
+#   Create repository 'centaurinetcfg' from 'setup.conf' and template
+#
+# When used to modify a system that is not booted the root is found by walking
+# up from <workdir>:
+#
+#       centaurosoho  --base=<workdir> config ...
 # ------------------------------------------------------------------------------
 actionConfig() {
-    get_base -f || return                           # change dir to base folder
+    local ccmd="${1:-network}" # mpnt="${2:--}"
+    if [ $# -lt 2 ] ; then
+        get_base -f || return                       # change dir to base folder
+    elif [ "${ccmd::3}" = 'que' ] ; then
+        get_base -n
+    else
+        invoke -e "Only 'query' can have a arguments" ; return
+    fi
+
+    # find root folder
+    local root="$PWD"
+    while [ "$root" != '/' ] ; do
+        root="${root%/*}" ; [ -z "$root" ] && root='/'
+        [ -d "$root/usr/bin" -a -d "$root/etc/default" ] && break
+    done
+    trace -a -p "Root folder: '%s'    Workspace: '%s'" "$root" "$PWD"
+
+    case "$ccmd" in
+    net*)
+        ;;
+    que*)
+        shift
+        cfg_apply "$@" ; return
+        ;;
+    sho|show)
+        cfg_params -r || return
+        cfg_params -w '-' ; return
+        ;;
+    upd*)
+        cfg_params -r || return
+        confirm -y "Update system configuration" || quit -a -u
+     message TODO update config
+        ;;
+    *)  invoke -e "Argument must be one of: %s" 'network query show update'
+        return
+    esac
+
+
+
     if [ -z "$SOHO_DOMAIN" ] ; then
         get_setup -c || return                      # load 'setup.conf'
     fi
 
-#    get_value xxxx otto - "Domain name (updates certificates)"
-#    get_value xxxx otto - "Default machine name prefix"
-#    get_value xxxx otto - "Network IPv4 address and mask bits"
-#    get_value xxxx otto - "Router name(s)"
-#    get_value xxxx otto - "Primary router IPv4 address"
-#    get_value xxxx centauri - "WLAN client SSID"
-#    get_value xxxx - '<please enter>' "WLAN password"
-
     local repo="$CEN_ROOT/configs/$SOHO_DISTRO/${SOHO_DOMAIN%%.*}"
     if [ -e "$repo/$DAT_SOHO_NETCFG" ] ; then
-        confirm -a -y "Replace the existing network configuration" || return
+        confirm -a -y "Replace the existing network configuration" || quit -a -u
     fi
 
     local file ; tmpfile -s file
@@ -628,8 +901,8 @@ actionDistr() {
 # Run docviewer
 # ------------------------------------------------------------------------------
 actionDocview() {
-    get_base -f || return                           # change dir to base folder
-    embed -x -v -- "$PWD/README/docviewer" "$@"
+    get_base -w || return                           # get base folder
+    embed -x -v -- "$SOHO_WORKSPACE/README/docviewer.dynamic" "$@"
 }
 
 # ------------------------------------------------------------------------------
@@ -638,22 +911,22 @@ actionDocview() {
 actionDump() {
     get_base -f || return                           # change dir to base folder
     get_setup -c
-    debug SOHO_DISTRO                     # [1] debian distribution
+    debug SOHO_DISTRO                       # [1] debian distribution
 
     # The template engine wants these variables:
 
     debug -i SOHO_DOMAIN
-    debug -i SOHO_DNAME                      #     generated from DOMAIN
-    debug -i SOHO_SONAME                     # [1]
+    debug -i SOHO_DNAME                     #     generated from DOMAIN
+    debug -i SOHO_SONAME                    # [1]
     debug    SOHO_NET_BASE
-    debug -i SOHO_NET_PUBLIC                 # [1]
+    debug -i SOHO_NET_PUBLIC                # [1]
     debug    SOHO_SERVER
     debug -i SOHO_SECOND
     debug    SOHO_ROUTERS
-    debug -i SOHO_NET_ROUTER_DEF             #     generated from SOHO_ROUTERS
+    debug -i SOHO_NET_ROUTER_DEF            #     generated from SOHO_ROUTERS
     debug -i SOHO_NET_ROUTER_IP4
-    debug -i SOHO_NET_WLAN                   # [1]
-    debug -i SOHO_NET_APNT                   # [1]
+    debug -i SOHO_NET_WLAN                  # [1]
+    debug -i SOHO_NET_APNT                  # [1]
     debug    CEN_NET_NETBITS
     debug -i CEN_NET_NETMASK
     debug -i CEN_NET_SERVER_GEN
@@ -835,7 +1108,7 @@ waitForNetwork() {
         fi
         context -t '-'
         if [ -n "$ftrp" ] ; then
-            confirm -n "Network check interrupted, continue anyhow" || quit -a -t
+            confirm -n "Network check interrupted, continue anyhow" || quit -a -u
         else
             message "Network is online"
         fi
@@ -849,7 +1122,7 @@ waitForNetwork() {
 actionPack() {
     get_base -f || return                           # change dir to base folder
 
-    confirm -n "Create distribution tars and delete the tar sources" || quit -a -t
+    confirm -n "Create distribution tars and delete the tar sources" || quit -a -u
 
     local ysav="$CEN_YESNO" ; CEN_YESNO='y'
     local dirs=() dist item seed fldr noex
@@ -1041,7 +1314,7 @@ actionRepository() {
 configCheck() {
     trace -a -c " " "$@"
     if [ ! -d "$DAT_REPOSITORY/$1" ] ; then
-        confirm -n -f "Host '%s' not found in repository. Continue anyhow" "$1" || quit -a -t
+        confirm -n -f "Host '%s' not found in repository. Continue anyhow" "$1" || quit -a -u
     fi
     return 0
 }
@@ -1055,8 +1328,8 @@ copyFromRepo() {
     esac
     trace -a -c " $fupd" "$@"
 
-    local path="${1%/*}" file="${1##*/}" dest="${2:--}" dflt="$3"
-    local name="${path//\//_}+$file"                # escape repo name
+    local dest="${2:--}" dflt="$3" name
+    get_path -d "$1" name                           # escape repo name
     local ndom="${name//$SOHO_DNAME/%D%}"           # allow domain substitution
     local glst=() repo="$DAT_REPOSITORY"
     [ "$dest" = '-' ] && dest="$1"
@@ -1201,7 +1474,7 @@ templ_subst() {
 }
 
 # ------------------------------------------------------------------------------
-# Restore a disk tar: <imag> <disk> [<name> [ext4|btrs] [<swap>]] [<para>]
+# Restore a disk tar: <imag> <disk> [<name> [ext4|btrs] [<swap>]] [<para>|-]
 # ------------------------------------------------------------------------------
 actionRestore() {
     local base disk dist rasp volf item host name curr="$PWD" para fsys swap swad='8'
@@ -1215,7 +1488,7 @@ actionRestore() {
         [1-9]*G)    swap="${1%G}"
                     [ -n "${swap//[0-9]}" ] && quit -e "Invalid swap size:" "$1"
                     ;;
-        [a-z]*)     name="$1" ;;
+        [a-z]*)     [ -z "$name" ] && name="$1" || para="$1";;
         *)          invoke -e "Invalid argument or hostname:" "$1" ; return
         esac ; shift
     done
@@ -1232,7 +1505,10 @@ actionRestore() {
     folder -c -f -m -r -- "$base"
     case "$CEN_INPFILE" in
     *-rpi_*)    swad='4'; rasp='rpi' ;;
-    *-r32_*)    swad='4'; rasp='rpi' ; [ -z "$fsys" ] && fsys='ext4'
+    *-r32_*)    swad='4'; rasp='rpi' ; [ -z "$fsys" ] && fsys='ext4' ;;
+    *debian-bookworm*)  item='worm9' ;;
+    *debian-trixie*)    item='trix9' ;;
+    *debian-*)          item='xxxx9' ;;
     esac
 
     # unpack imag
@@ -1242,9 +1518,17 @@ actionRestore() {
         host="${labl%%_*}"
     fi
 
-    [ -z "$name" ] && get_value name "$host" - "Set hostname of installed image"
+    if [ -n "$item" ] ; then
+        warning "A minimal system must be renamed or will not boot:" "$host"
+        name="$item" ; item=
+    elif [ -z "$name" ] ; then
+        name="$host"
+    fi
+    [ -z "$item" ] && get_value name "$name" - "Set hostname of installed image"
     [ -z "$swap" ] && get_value swap "$swad" - "Size of swap partition in GByte"
-    [ -n "${swap//[0-9]}" ] && quit -e "Invalid swap size:" "$1"
+
+    [[ "$name" =~ [a-z][-a-z]*[a-z] ]] || quit -e "Invalid host name:" "$name"
+    [ -n "${swap//[0-9]}" ] && quit -e "Invalid swap size:" "$swap"
 
     local opts=('-y' '-D' "$CEN_BLKDEVICE")
     if [ "${#labl[@]}" = 1 ] ; then                     # bios boot, no gpt ...
@@ -1257,17 +1541,54 @@ actionRestore() {
         opts+=('-4')
     else
         volf="${host}_volumes"
-        [ -e "$volf" ] || { opts+=('-4') ; volf= ; }    # ext4 mode without volumes file
+        if [ ! -e "$volf" ] ; then                      # ext4 mode without volumes file
+            opts+=('-4') ; volf= ; fsys='ext4'
+        fi
     fi
 
     [ "$name" != "$host" ] && opts+=(-N "$name")
     if [ -n "$rasp" ] ; then
-        confirm -a -n -f '%-46s' "Install '$name' in 'raspberry' mode" || return
+        confirm -a -y -f '%-46s' "Install '$name' in 'raspberry' mode" || return
         embed -z -v centauridisk "${opts[@]}" -M -R 512 -P$swap -- "${labl[1]}"
     else
-        confirm -a -n -f '%-46s' "Install '$name' in 'x86/pc' mode" || return
+        confirm -a -y -f '%-46s' "Install '$name' in 'x86/pc' mode" || return
         embed -z -v centauridisk "${opts[@]}" -P$swap -- "${labl[1]}"
     fi
+
+    # replace grub.cfg (ext4 mode only)
+    while [ "$fsys" = 'ext4' ] ; do
+        system -e -p -r -- partprobe ; sleep 1
+        automount -b -- "${name}_root" || break ; auto=1
+        [ -x "$CEN_MOUNT_DIR/usr/sbin/udate-grub.distrib" ] && break
+
+        message "Replacing 'grub.cfg' with 'grub.minimal'"
+        local gcfg stab="s/^set myname=.*/set myname=$name/"
+        system -e -p -s gcfg -- sed -e "$stab" 'grub.minimal' || break
+        create -t -v gcfg -- "$CEN_MOUNT_DIR/boot/grub/grub.cfg"
+
+        targ='/usr/sbin/update-grub'
+        message "Diverting '$targ' to noop"
+        system -e -p dpkg-divert --root="$CEN_MOUNT_DIR" --rename --add "$targ" || break
+        targ="$CEN_MOUNT_DIR$targ"
+        dryrun "<script $targ>" && break
+        {   echo "#!/usr/bin/bash"
+            echo echo "update-grub: disabled by '$CEN_NAME'"
+            echo exit 0
+        } >"$targ"
+        system -e -p -- chmod 775 "$targ"
+        break
+    done
+
+    # apply parameter settings
+    while [ "$para" != '-' ] ; do
+        if [ -z "$auto" ] ; then
+            system -e -p -r -- partprobe ; sleep 1
+            automount -b -- "${name}_vol0" || break
+            auto=1
+        fi
+        actionConfig query "$CEN_MOUNT_DIR" "$name" "$para"
+        break
+    done
 
     # extra volumes
     if [ -n "$volf" ] ; then
@@ -1314,7 +1635,7 @@ actionSetup() {
     # run config if we have no cached netcfg ...
     if [ ! -s "$CEN_ROOT/persistent/centaurinetcfg" ] ; then
         message "Creating network configuration data"
-        actionConfig ; error -t || return
+        actionConfig 'net' ; error -t || return
     fi
 
     # run setup script ...
@@ -1345,16 +1666,27 @@ actionSetup() {
     fi
 
     # at this point setup has sourced setup.conf, so we can use it's variables
+    dryrun -s 'setup' && return
+
     local repo="$CEN_ROOT/configs/$SOHO_DISTRO/${SOHO_DOMAIN%%.*}"
     if [ "templates/$DAT_SOHO_NETCFG.TEMPLATE" -nt "$repo/$DAT_SOHO_NETCFG" ] ; then
         message "The network configuration needs to be updated"
-        actionConfig
+        actionConfig 'net'
     fi
 
     trace -p "Calling '%s' in 'setup' script" "$CEN_OPT_DISPATCH"
     [ -n "${CEN_CMDARGS[CEN_CMDINDX]}" ] && DAT_NOT_LAST=1 || DAT_NOT_LAST=
     isfunction -c -e --  "$CEN_OPT_DISPATCH" $verb "$@"
     trace -p "Returned from '%s'" "$CEN_OPT_DISPATCH"
+
+    local serv icli
+    nethost "$HOSTNAME" ; icli="$_nethost_ip"
+    if netquery -e -s serv primary ; then
+        nethost "$serv"
+        SOHO_LOCKED="$SOHO_DOMAIN - - $serv $_nethost_ip"
+    else
+        SOHO_LOCKED="$SOHO_DOMAIN $HOSTNAME $icli $serv $_nethost_ip"
+    fi
 
     if [ 'setup.conf' -nt "$DAT_SOHO_PARAMS" ] ; then
         trace "Updating parameter file..."
@@ -1375,8 +1707,6 @@ actionTemplate() {
 }
 
 copyFromTemplate() {
-    dryrun "template $1 $2" && return
-
     if [ -z "$DAT_GOT_CONF" ] ; then
         get_base -n || return
         if [ -z "$CEN_NET_DOMAIN" ] ; then
@@ -1385,19 +1715,25 @@ copyFromTemplate() {
         DAT_GOT_CONF=1
     fi
 
-    local tmpl="$SOHO_WORKSPACE/templates/${1#templates/}"
-    tmpl="${tmpl%.TEMPLATE}.TEMPLATE"
+    local dest tmpl="${1%.TEMPLATE}.TEMPLATE"
+    [ "${tmpl::1}" = '/' ] || tmpl="$SOHO_WORKSPACE/templates/${tmpl#templates/}"
 
     if [ "$2" = '.' ] ; then
-        get_path -u "${tmpl%.TEMPLATE}" xxxx
-        outfile -- "$xxxx" || return
+        get_path -u "${tmpl%.TEMPLATE}" dest    # un-decorate destination
+        dest="${dest//%D%/$SOHO_DNAME}"         # allow domain substitution
+        outfile -- "$dest" || return
     elif [ "${2:--}" = '-' ] ; then
-        inpdata -c templ_subst -- "$tmpl"
+        inpdata -r -c templ_subst -- "$tmpl"
         return
+    elif [ -d "$2" ] ; then
+        get_path -u "${tmpl%.TEMPLATE}" dest    # un-decorate destination
+        dest="${dest//%D%/$SOHO_DNAME}"         # allow domain substitution
+        outfile -a -q -- "$2$dest" || return
     else
         outfile -a -- "$2" || return
     fi
 
+    dryrun "template $tmpl -> $CEN_OUTFILE" && return
     inpdata -c templ_subst -- "$tmpl" >"$CEN_OUTFILE"
     [ -x "$tmpl" ] && attributes -m 775 -- "$CEN_OUTFILE"
 }
@@ -1502,33 +1838,13 @@ actionWorkspace() {
 }
 
 # ------------------------------------------------------------------------------
-# Handle config updates for action restore: -no args-
+# Testing
 # ------------------------------------------------------------------------------
-# This routine is called twice:
-#   1. before unzip:    check for 'params' or 'setup.conf' file, query parameters
-#   2. after unzip:     patch 'setup.conf' and run 'configure'
-# ------------------------------------------------------------------------------
-DAT_SOHO_CFGSTAT=1                        # see ...
-SOHO_NET_WLAN_PW=
 actionXxx() {
-#get_base
-
-# TODO set run_setup cfg_params -w
-# TODO backup cp "$DAT_SOHO_PARAMS" 'imagetool.cfg'
-# TODO restore imagetool.cfg -> template -> centaurinetcfg
-
-cfg_params -q #"$PWD/params"
-cfg_params -w #"$PWD/params"
-quit
-
-
-        ### TODO WLAN and APNT must be in centaurinetcfg
-
-        # restore:   (1) after restore mount root
-        #            (2) run sed script on /root/..../setup.conf
-        #                update /root/..../passwd with wlan pwd
-        #            (3) get new centaurinetcfg from template
-        #            (4) run centaurinetcfg
+#    cfg_apply "$@"
+local temp
+get_path "-$1" "$2" temp
+message "$2  ->  $temp"
     return 0
 }
 
@@ -1561,7 +1877,7 @@ actions() {
 
     # admin actions
     con*)
-        invoke -s 'config'  -               0 ;;   # no args
+        invoke -s 'config'  -             1 4 ;;   # 1 .. 4 args
     dis*)
         invoke -s 'distr'   -             0 2 ;;   # one optional arg
     doc*|help)
@@ -1611,7 +1927,7 @@ actions() {
     vac*)
         invoke -r 'vacuum'   -              0 ;;
     xxx*)
-        invoke  'xxx'   -              0 ;;
+        invoke  'xxx'   -              0 + ;;
 
     # short form aliases for 'clone'
     /dev/*)
@@ -1636,7 +1952,7 @@ usage() {
         -o - \
         -o '--dispatch   <func>'  $"internal: used by setup helper to register" \
         -o -                      $"          a dispatch function for commands" \
-        -o '-B --base    <fldr>'  $"base folder containing the seed tar" \
+        -o '-B --base    <fldr>'  $"workspace folder containing the seed tar" \
         -o '-C --current <dist>:<inst>' \
         -o -                      $"select the current distribution and installation" \
         -o '-N --netcfg  <mnet>'  $"prefer 'centaurinetcfg' data over 'setup.conf'" \
@@ -1660,7 +1976,7 @@ usage() {
     usageset \
         -a - \
         -a "••• packaging commands •••" \
-        -a 'config'               $"update configuration from 'setup.conf'" \
+        -a 'config     <carg>'    $"update configuration from 'setup.conf'" \
         -a 'distrib    [[<dist>]°<conf>]' \
         -a -                      $"generate distributable tar file from workspace" \
         -a 'expand     [<soho>]'  $"create workspace from distributable tar file" \
@@ -1687,7 +2003,7 @@ usage() {
         -a -                      $"change the hostname" \
         -a 'repository [<path> [<dest>|- [<dflt>|-]]]' \
         -a -                      $"install from repository" \
-        -a 'restore    <dist> <disk> [ext4|btrfs] [<name>] [<swap>] [<para>]' \
+        -a 'restore    <dist> <disk> [ext4|btrfs] [<name>] [<swap>] [<para>|-]' \
         -a -                      $"install an image tar to a block device" \
         -a 'template   <path> [<file>|-|.]' \
         -a -                      $"expand a template to stdout or a file" \
@@ -1712,7 +2028,8 @@ usage() {
         -p '<key>'                $"a chapter number or a word to search for" \
         -p '<mnet>'               $"use one of: 0|off  1|on  2|auto (default)" \
         -p '<name>'               $"the name that is assigned to the clone" \
-        -p '<para>'               $"paramater file (example: params.conf)" \
+        -p '<para>'               $"paramater file (default: /etc/default/$CEN_NAME)," \
+        -p -                      $"use '-' to disable configuration prompts" \
         -p '<path>'               $"full path name, starts with '/'" \
         -p '<seed>'               $"alternate seed tar (gets linked to seed.tar)" \
         -p '<soho>'               $"master tar file (the distributable)" \

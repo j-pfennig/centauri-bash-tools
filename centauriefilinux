@@ -83,6 +83,7 @@ do_cmdline() {
         _xtra='[*]'
         case "$_item" in
         BOOT_IMAGE=*)       ;;
+        fsck.repair=*)      ;;
         root=*)             ;;
         rootflags=*)        ;;
         centauriswitch=*)   ;;
@@ -226,8 +227,10 @@ do_image() {
     local cmdl="$idir/$DAT_CMDLINE"
     local ipkg="${idir##*/}/$DAT_CMDLINE"
 
-    # migrate old kernel-cmdline
+    # backward compatibility: migrate old-style kernel-cmdline
     [ -e "$idir/kernel-cmdline" ] && move -o -q -- "$idir/kernel-cmdline" "$cmdl"
+
+    ### TODO: the loader cannot override a built-in cmdline if SecureBoot is on
 
     if [ -e "$cmdl" ] ; then
         if [ -h "$DAT_BOOTDIR/efi" -o -d "$DAT_BOOTDIR/efi" ] ; then
@@ -254,11 +257,6 @@ do_image() {
     local opts=() offs alig size acmd
     inpfile -- "$DAT_DIST_STUB" || return 1         # linuxx64.efi.stub
     tmpfile -r -f
-
-    #system -r -e -z objdump -p "$DAT_DIST_STUB" > "$CEN_TMPFILE" || return 1
-    #acmd='{ if ($1 == "SectionAlignment"){print $2} }'
-    #system -r -e -p -s alig awk "$acmd" < "$CEN_TMPFILE"
-    #alig=$((16#$alig))
 
     system -r -e -z objdump -h "$DAT_DIST_STUB" > "$CEN_TMPFILE" || return 1
     acmd='NF==7 {size=strtonum("0x"$3); offset=strtonum("0x"$4)} END {print size + offset}'
@@ -369,7 +367,7 @@ do_mokcreate() {
 
     message -a "Creating MOK key (with pass phrase) ..."
     remove "$DAT_MOKDIR"/*
-    # get domain name via kernel, network may be not yes Configured
+    # get domain name via kernel, network may be not yet configured
     local sdom
     read sdom </proc/sys/kernel/domainname || warning "Cannot get domain name"
     [ -z "$sdom" ] && sdom='unknown' || sdom="${sdom%%.*}"
@@ -941,7 +939,7 @@ actionMenu() {
         fi
     fi
     trace -a -c "Kernel root is" "$root"
-    root="root=$root ro"
+    root="root=$root ro fsck.repair=yes"
 
     local netw='centauriswitch=simple'
     local opt1='mitigations=off security= quiet'

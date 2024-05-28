@@ -21,8 +21,8 @@ DAT_NO_BOOT=
 DAT_ARCH_BOOT=
 DAT_PREFIX=                     # see do_prefix
 DAT_PREFIX_DISK=
-DAT_CLONE_BOOT=
-DAT_CLONE_DISK=
+DAT_CLONE_BOOT=                 # boot partion label (if random)
+DAT_CLONE_DISK=                 # root partion label (if random)
 
 DAT_PART_EFI=
 DAT_PART_GRUB=
@@ -153,9 +153,6 @@ do_boot() {
         optmake -a opts -n 'boot' -v "$1"
         if [ "$CEN_OPT_NAME" != "$DAT_SYS_NAME" ] ; then
             optmake -a opts -n 'clone' -v "$CEN_OPT_NAME"
-            optmake -a opts -n 'clone' -v "${DAT_CLONE_BOOT:-+}"
-            optmake -a opts -n 'clone' -v "${DAT_CLONE_DISK:-+}"
-            optmake -a opts -n 'clone' -v "$1/grub"
         fi
         embed -z -y  centaurirestore "${opts[@]}" "$DAT_ARCH_BOOT"
         error -t || return
@@ -345,7 +342,8 @@ run() {
         warning -a "Destination name equal to hostname (consider using '--name')"
         if confirm -a -q "Do you want to continue using random disk labels" ; then
             do_prefix
-            DAT_CLONE_BOOT="$DAT_PREFIX" ; DAT_CLONE_DISK="$DAT_PREFIX"
+            DAT_CLONE_BOOT="$DAT_PREFIX"
+            DAT_CLONE_DISK="$DAT_PREFIX"
             DAT_PREFIX_DISK="$DAT_PREFIX"
             rena=" (using label prefix '$DAT_PREFIX')"
         fi

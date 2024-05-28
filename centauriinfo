@@ -540,11 +540,10 @@ actionDisk() {
     local dev lbl typ all fre use per nam mpt used
     indx=0
     while [ "$indx" -lt "${#itms[*]}" ] ; do
-        #echo "${itms[indx]}"
         eval "${itms[indx]}"
         flds=("$NAME" "$LABEL" "$FSTYPE" "$SIZE" "$MOUNTPOINT" "$TYPE")
         [ "${MOUNTPOINT::1}" = "/" ] && iinf=$((iinf + 1))
-        indx="$((indx + 1))"
+        ((indx += 1))
 
         fre="-" ; use="-" ; per="-"
         if [ "${flds[5]}" = "part" -o -n "${flds[2]}" ] ; then # partition
@@ -567,13 +566,13 @@ actionDisk() {
             [ -z "${flds[1]}" -a -z "${flds[2]}" ] && continue
             local labl="${flds[1]##*_}"
             [ "${labl::3}" = "boo" -a "${flds[2]:-vfat}" = "vfat" \
-              -a -z "${flds[4]}" ] && continue
+                                   -a -z "${flds[4]}" ] && continue
         fi
 
         [ -n "$all" ] && all="$(((all + (2 << 28)) >> 30))G"
         dev="${flds[0]}"
-        typ="${flds[2]}"
         lbl="${flds[1]}"
+        typ="${flds[2]}"
         mpt="${flds[4]}"
         if [ "${mpt::1}" = "/" ] ; then
             nam="${mpt##*/}"

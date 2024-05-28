@@ -271,6 +271,10 @@ do_rename() {
         error "Don't know new name, cannot rename" ; return 1
     fi
 
+    if [ -n "$CEN_FLG_BOOT" ] ; then            # restoring efi partition
+        do_update "$name" ; return              # update only grub and loader
+    fi
+
     # on BRTFS
     if matchpath -d -o -s vroot "$vroot-$CEN_FLG_DIST" "$vroot" ; then
         base="$PWD"
@@ -316,10 +320,10 @@ do_rename() {
 
     # generate network configuration
     if [ -e "$conf" ] ; then
-        trace -a "Update network configuration"
-        [ -n "$CEN_DAT_DOMAIN" ] && full="$name.$CEN_DAT_DOMAIN"
+        [ -n "$CEN_DAT_DOMAIN" ] && full="$name.$CEN_DAT_DOMAIN" || full="$name"
+        trace -a "Update network configuration:" "$full"
         [ "$PWD" -ef '/' ] && orig= || orig='--output=.'
-        embed -i -v centaurinetcfg $orig "--config=$conf" setup "${full:-$name}"
+        embed -i -v centaurinetcfg $orig "--config=$conf" setup "$full"
     else
         create -t -v name -- 'etc/hostname' 644
         trace -a "No 'centaurinetcfg', skip network configuration"
@@ -334,7 +338,7 @@ do_rename() {
         fi
     fi
 
-    # update grub and fstab
+    # update grub/loader and fstab
     do_update "$name" +
 }
 
@@ -356,11 +360,17 @@ do_update() {
     # firm: <boot-mpt>
 
     if [ "$sgrb" = '+' ] ; then
-        if ! matchpath -e -d -o -s sgrb -- /mnt/boot/{grub,efi,EFI} \
-                                           /boot/{grub,efi,EFI} ; then
-            error "No boot path not found" ; return
-        fi
+        matchpath -e -d -o -s sgrb -- mnt/boot/{grub,efi,EFI} boot/{grub,efi,EFI}
+    elif [ -n "$CEN_FLG_BOOT" ] ; then
+        matchpath -e -d -o -s sgrb -- ./{grub,efi,EFI}
     fi
+
+    if [ -n "$sgrb" ] ; then
+        trace -a -c "Boot loader path" "$sgrb (base=$PWD)"
+    else
+        error "No boot path not found" "(base=$PWD)" ; return
+    fi
+
     local mpnt
     case "$sgrb" in
     -)  ;;
@@ -369,7 +379,7 @@ do_update() {
             error "Boot path must not be a symlink:" "$sgrb" ; return
         fi
         mpnt="${sgrb%/*}" ;;
-    *)  error "Bad boot path (must match '/*/grub|efi'):" "$sgrb" ; return
+    *)  error "Bad boot path (must match '*/grub|efi'):" "$sgrb" ; return
     esac
 
     if [ -z "$mpnt" ] ; then
@@ -395,11 +405,16 @@ do_update() {
     # LABEL=rootfs       ->  LABEL=${sdsk}_root   # (3)
     # PARTUUID=*-02      ->  LABEL=${sdsk}_root   # (3)
 
+    # UUID=* /           ->  LABEL=${sdsk}_root
+    # UUID=* none        ->  LABEL=${sdsk}_swap
+
     local stab svol='swap|vol0|vol1|archive|backup|shared|vbox|windows'
     if [ "$sboo$sdsk" != '--' -a -n "$2" ] ; then
         stab="s/^(LABEL=[a-zA-Z0-9-]*_boot|LABEL=bootfs|PARTUUID=[a-zA-Z0-9]*-01)/LABEL=${sboo}_boot/g"
         stab+="; s/^(#?LABEL=)([a-zA-Z0-9-]*)_(root|$svol)/\1${sdsk}_\3/g"
         stab+="; s/^(PARTUUID=[a-zA-Z0-9]*-02|LABEL=rootfs)/LABEL=${sdsk}_root/g"
+        stab+="; s/^(UUID=[-a-zA-Z0-9 ]*\/ )/LABEL=${sdsk}_root \/ /g"
+        stab+="; s/^(UUID=[-a-zA-Z0-9 ]*none )/LABEL=${sdsk}_swap none /g"
         what+=('etc/fstab')
         do_rewrite "etc/fstab" "$stab"
     fi
@@ -650,6 +665,8 @@ do_sysrest() {
 
     do_restore "$puser" "$fuser"
     do_restore "$phome" "$fhome"
+    message -a "Waiting for queued disk writes to complete..."
+    system -e -p -- sync
 
     # --- clone ---
 
@@ -854,7 +871,8 @@ examples:
        (7) $CEN_NAME -R /mnt/xxx -C +
        (8) $CEN_NAME -R /mnt/xxx -C yoursys -C - -C - -C /mnt/yyy/grub
 
-       (9) $CEN_NAME -G -P sda1 -
+       (9)  $CEN_NAME -B /mnt/yyy -C yoursys mysys_boot_2022-05-02.tgz
+       (10) $CEN_NAME -G -P sda1 -
 
 For (1) a mount-point /mnt/sda1 is created, /dev/sda1 is formatted and labeled
 'mysys_root'. The usr and home tgz files are automatically used.  For case (2)
@@ -867,7 +885,8 @@ Form (6) renames the actual machine. (7) should be used after a manual untar to
 fixup some devices, folders and the machine-id. (8) does not change fstab and
 passes the base folder of grub.cfg.
 
-The BIOS version of grub can be installed using form (9).
+An EFI boot partition is restored using form (9). The BIOS version of grub can
+be installed using form (10).
 !EOF
 }
 

@@ -73,7 +73,7 @@ do_image() {
     local list line vnam vimg vpri mnam="$2"
     local lkey lval stat=0 mesg='message'
 
-    system -a list -e -p -- vboximg-mount -l || return
+    system -a list -e -p -r -- vboximg-mount -l || return
 
     [ -n "$mnam" ] && mesg='trace'
 
@@ -306,7 +306,7 @@ actionMgr() {
 }
 
 # ------------------------------------------------------------------------------
-# run vboximg-mount: [<name>|<path>|<uuid> [<where>] [rw]]
+# run vboximg-mount: [<name>|<path>|<uuid> [<where> [rw] [<part>...]]]
 # ------------------------------------------------------------------------------
 actionMount() {
     system -c -- vboximg-mount || return
@@ -330,6 +330,15 @@ actionMount() {
                     bnam="${aimg##*/}" ; bnam="${bnam%%.*}" ;;
     -|'')           anam="$DAT_NAME" ;;
     *)              anam="$what" ; bnam="$anam"; folder -c -f -- "$DAT_DRIVES"
+    esac
+
+    [ "$base" = '-' ] && base="$HOME/Mount"
+    outfile -d -l -s base -- "$base" || return
+    case "$base" in
+    $HOME/*)    ;;
+    ./*|../*)   invoke -e "Invalid mountpoint:" "$base" ; return ;;
+    /*)         invoke -w "Mountpoint not a subfolder of '%s'" "$HOME" ;;
+    *)          base="$HOME/$base"
     esac
 
     if [ -n "$aimg" ] ; then
@@ -358,8 +367,6 @@ actionMount() {
     fi
 
     # mount folder
-    [ "$base" = '-' ] && base="$HOME/Mount"
-    outfile -d -l -s base -- "$base" || return
     base+="/$bnam"
     if [ -d "$base" ] ; then
         if findmount -- vboximg-mount "$base" ; then
@@ -375,6 +382,13 @@ actionMount() {
     # mounting volumes
     local list item part mopt
     matchpath -a list -e -- "$base"/vol? || return
+    if [ $# = 0 ] ; then
+        case "${#list[*]}" in
+        4)  set -- + - - / ;;
+        3)  set -- + - / ;;
+        2)  set -- + / ;;
+        esac
+    fi
     for part in "${list[@]}" ; do
         item="${base}_${part##*/}"
         mopt=('-l')
@@ -674,20 +688,20 @@ actions:
        gui                  run the VirtualBox gui as 'vbox'
        help    [<cmd>]      show VBoxManage help
        init    [-]          load kernel driver (use - to unload driver)
-       mount   [<name>|<path>|<uuid> [<mdir>] [RW] [<part>...]]
-                            list or mount a vdi images/snapshots
+       mount   [<name>|<path>|<uuid> [<mdir>|- [RW] [<part>...]]]
+                            list or mount vdi images/snapshots
        restore [<snap>|-]]  wait and restore to (current) snapshot
        start   [<name>]     start a virtual machine
        stop    [<name>]     stop a virtual machine via ACPI powerbutton
        unmount [<name>|<path>|<uuid>|- [<where>]]
-                            list mounts or unmount (use - for all mounts)
+                            list mounts or unmount (use '-' for all mounts)
        wait                 wait for virtual machine to terminate
        <cmd> <args>...      run VBoxManage as user 'vbox'
 
 arguments:
        <cmd>                a native virtualbox command
-       <disk>               x
-       <mdir>               mount directory (default is /media/<user>/...)
+       <disk>               name of a registered vbox disk image
+       <mdir>               mount directory (default is $HOME/Mount)
        <part>               partition selector (- skip, + mount, /... subvol)
        <port>               x
        <size>               x

@@ -351,6 +351,7 @@ do_remove() {
 # Return:  0=ok, state changed   1=ok, no state change   2=failure
 # ------------------------------------------------------------------------------
 do_secrets() {
+trace "do_secrets CEN_OPT_NOHOOK=$CEN_OPT_NOHOOK: $*"
     local actn="${1:-client}"
     local iopt ; [ -n "$2" ] && iopt="--interface $2"
     local curr=' - '
@@ -798,10 +799,9 @@ actionDhcp() {
 
     # run client helper: <mesg> '-u|-w|-x'|<start-opt>...
     ___dhclient() {
-#message ___dhclient "$ifce: $*"
         local tick mesg="$1" opts=('-nw') ; shift
         if [ "$1" = '-x' ] ; then
-            system -q dhclient -pf "$pref.pid" -lf "${pref%.*}.leases" -x
+            system -q dhclient -x -pf "$pref.pid" -lf "$pref.leases" "$ifce"
             remove "$pref".*
         else
             remove "$pref.pid"
@@ -865,8 +865,6 @@ actionDhcp() {
             do_setup -d                             # create callback script
             if nettool -d "$ifce" exists ; then
                 ___dhclient "Started dhcp client" "-${1::1}"
- #               background -s ___dhclient "Started dhcp client" "-${1::1}"
- #               background -c "$CEN_BACKGROUND" '/'
             else
                 error "No such interface:" "$ifce" ; return
             fi
@@ -990,7 +988,7 @@ actionService() {
 }
 
 # ------------------------------------------------------------------------------
-# Service actions: -no args-
+# Service actions:
 #
 # Modes:    disabled    do not run centauri(filter,route,secrets) services
 #           static      (server) centaurisecrets is service, can have bridge
@@ -1005,10 +1003,10 @@ actionStart() {
 
     if [ "$CEN_ACTION" = 'enter' ] ; then
         nettemp  -c "$CEN_NAME-disable"     # inhibit start via dependency
-    else
+    fi #else
         # parse centauriswitch kernel arg, create centauriswitch status file
         embed -v centauriroute -t init "$@" || return
-    fi
+   # fi
     nettemp && . "$_nettemp"
     do_override -i                          # init override files
 
@@ -1236,7 +1234,7 @@ actionUpDown() {
         fmnm=1 ; fmet=1 ; fgen=2 ; fscr=1
     fi
 
-    # tun (VPN) has only ipv4 and does it's own metrics
+    # tun (VPN) does its own config, we only drop the smart IP addr ...
     if [ -n "$ftun" ] ; then
         message -a "open/close VPN tunnel:" "$CEN_ACTION" "$ifce"
         # exec centauriroute, no return ...
@@ -1386,6 +1384,9 @@ actionUpDown() {
             trace -a "Interface not up, no server check:" "$ifce"
         fi
     fi
+   # timer -i -
+   #[ "$CEN_ACTION" = 'up' ] && ___chkipv6
+   # timer -m
     CEN_EXIT=0                                          # make ifup/ifdown happy
 }
 
@@ -1396,6 +1397,7 @@ options() {
     case "$CEN_ACTION" in
 
     '')                                 # end of option parsing ...
+        trace "main ${CEN_CMDOPTS[@]} ${CEN_CMDARGS[@]}"
         do_netcfg                       # make sure to have cached config
         netconfig -f ;;                 # cannot run without config
 

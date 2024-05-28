@@ -4,7 +4,7 @@ CEN_LEGAL="Dr. J. Pfenig (c) 2023-2024; BSD License"
 CEN_TITLE=$"Tool to (un)install and run Home Assistant"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -y - '0.13:2' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -y - '0.14:2' || exit 2
 
 # Data
 DAT_BASE='/opt/HomeAssistant'
@@ -19,20 +19,17 @@ CEN_OPT_VERSION='2024.1.6'
 # ------------------------------------------------------------------------------
 actionAutorun() {
     folder -b 'persistent' -c -f
-    local word sise
+    local word
     if ! listsearch -u -m word -- "${1:-status}" 'on' 'off' 'status' ; then
         invoke -e "Argument must be one of: on off status" ; return
     fi
-
-    system -q systemctl is-enabled 'centaurihass.service' && sise='enabled'
-
+# TODO autologin
     case "$word" in
     on)     create -- 'centaurihass.enabled'
-            [ -z "$sise" ] && system -e -p \
+            system -q systemctl is-enabled 'centaurihass.service' || system -e -p \
                 systemctl enable "$CEN_ROOT/systemd/system/centaurihass.service"  ;;
     off)    remove -- 'centaurihass.enabled' ;;
-    *)      [ -f 'centaurihass.enabled' ] && word='on' || word='off'
-            message -a "$word $sise"
+    *)      actionStatus
     esac
 }
 
@@ -108,6 +105,20 @@ actionShell() {
 }
 
 # ------------------------------------------------------------------------------
+# show status: -no args-
+# ------------------------------------------------------------------------------
+actionStatus() {
+    folder -b 'persistent' -c -f
+    local word sise
+
+    system -q systemctl is-enabled 'centaurihass.service' &&
+        sise="enabled" || sise="not enabled"
+
+    [ -f 'centaurihass.enabled' ] && word="on" || word="off"
+    message -a -p "Autorun: %s   Service: %s" "$word" "$sise"
+}
+
+# ------------------------------------------------------------------------------
 # run systemctl: -no args-
 # ------------------------------------------------------------------------------
 actionSystemctl() {
@@ -170,7 +181,9 @@ actions() {
     upg*)
         invoke    'upgrade' -          0 ;;
 
-    start|stop|restart|status)
+    status)
+        invoke    -         -          0 ;;
+    start|stop|restart)
         invoke -r -  actionSystemctl   0 ;;
     esac
 }

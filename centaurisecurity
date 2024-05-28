@@ -212,8 +212,8 @@ actionSystem() {
     # system dirs
     system -e -p -n -- mkdir -p         /data /export /home /mnt "$CEN_ROOT"
 
-    attributes -o root:root -m 775      / /data /home /mnt
-    attributes -o root:wheel -m 775     /archive /export /shared
+    attributes -o root:root -m 775      / /data /home /mnt /var
+    attributes -o root:wheel -m 775     /archive /export /shared /var/backups
     attributes -o root:root  -m 700 -d  "$APP_USER_ROOT"
     attributes -o root:root  -m 644     /etc/ssh/ssh_known_hosts /etc/ssh/ssh*.pub
 

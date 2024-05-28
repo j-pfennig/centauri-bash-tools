@@ -1,10 +1,10 @@
-#!/bin/bash
+#!/usr/bin/bash
 # ------------------------------------------------------------------------------
-CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2018-2023; BSD License"
+CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2018-2024; BSD License"
 CEN_TITLE="Repository Management and Synchronisation Tool"
 
 # ATTENTION: PATH is set non-standard to allow action 'setup' as described in help
-PATH="${0%/*}:$PATH" . _centauri_bash_lib -a -d -f -m sys -y "$0" "0.31:2" || exit 2
+PATH="${0%/*}:$PATH" . _centauri_bash_lib -a -d -f -m sys -y - '0.32:2' || exit 2
 
 CEN_OPT_ALL=                    # see --all
 CEN_OPT_CONFIG=                 # see --config
@@ -58,6 +58,29 @@ DAT_MAP_FAMILY=([debian]=d [raspbian]=d [ubuntu]=d [suse]=s)
 DAT_COND_DIST=
 DAT_COND_BOOL=
 DAT_COND_CRON=                  # cput/cget flag
+
+# ------------------------------------------------------------------------------
+# convert repository file name: -d|-u <name> <vnam>
+# ------------------------------------------------------------------------------
+#   -d decorate
+#   -u undo '-d' decoration
+# ------------------------------------------------------------------------------
+do_convert() {
+    local _sout _sinp _spat
+    case "$1" in
+    -d)     _spat="${2%/*}" ; _sinp="${2##*/}"
+            _spat="${_spat//_/°}"
+            _sout="${_spat//\//_}+$_sinp"
+            ;;
+    -u)     _spat="${2%+*}" ; _sinp="${2##*+}"
+            _spat="${_spat#*/?_}" ; _spat="${_spat#_}"
+            _spat="${_spat//_/\/}" ; _spat="${_spat//°/_}"
+            _sout="$_spat/$_sinp" ; [ "${_sout::1}" = '/' ] || _sout="/$_sout"
+            ;;
+    *)      fatal -t '?' "$1"
+    esac
+    printf -v "$3" '%s' "$_sout"
+}
 
 # ------------------------------------------------------------------------------
 # Helpers
@@ -186,10 +209,10 @@ do_setup() {
         fi
         if [ ! -L "$2" ] ; then
             warning -a "Missing repository symlink:" "$2"
-            DAT_REPSTAT=$((DAT_REPSTAT + 2))
+            ((DAT_REPSTAT += 2))
         elif [ ! "$2" -ef "$rful" -a -z "$DAT_OVERRIDE" ] ;then
             warning -a "Repository symlink invalid:" "$2"
-            DAT_REPSTAT=$((DAT_REPSTAT + 4))
+            ((DAT_REPSTAT += 4))
         fi
         joinpath -s "$1" -- "$DAT_ROOT" "$rful"
     }
@@ -234,13 +257,14 @@ do_repository() {
 # update configuration file: -no args-
 do_conf_updt() {
     [ -n "$DAT_CFGSTAT" ] && return ; DAT_CFGSTAT=1
-    local cfgb="${DAT_CONFIG%/*}" cfgn="${DAT_CONFIG##*/}"
-    local cfgr="$DAT_SHARED/$DAT_KEYS${cfgb//\//_}+$cfgn"
-
+    local cfgr
+    do_convert -d "$DAT_CONFIG" cfgr
+    cfgr="$DAT_SHARED/$DAT_KEYS$cfgr"
     if [ ! -e "$cfgr" ] ; then
         local cfgd="${DAT_NET_DOMAIN:-(none)}"
         [ "$cfgd" = "(none)" ] && cfgd="${CEN_OPT_REPO#*:}"
-        cfgr="$DAT_ROOT/configs/$DAT_NICKNAME/$cfgd/@shared/$DAT_KEYS${cfgb//\//_}+$cfgn"
+        do_convert -d "$DAT_CONFIG" cfgr
+        cfgr="$DAT_ROOT/configs/$DAT_NICKNAME/$cfgd/@shared/$DAT_KEYS$cfgr"
         [ -e "$cfgr" ] || return
         message -a "Configuration file repository:" "${cfgr%/*}"
     fi
@@ -258,7 +282,7 @@ do_rights() {
         system -e -p -r -a $2 -d "|\n" -- stat --format="chmod 0%a|chown %U:%G" "$_fil1" "$_fil2"
     else
         local -n _asta="$2"
-        if [ "${#_asta[@]}" = "4" ] ; then
+        if [ "${#_asta[@]}" = 4 ] ; then
             if [ -e "$_fil1" ] ; then
                 system -e -p -- ${_asta[0]} "$_fil1"
                 system -e -p -- ${_asta[1]} "$_fil1"
@@ -631,7 +655,7 @@ actionLocal() {
     local over                              # set be 'override' action
     local cmdc="cp -abu --dereference"
     local cmdd="rm -f"
-    local cmdl="/bin/ln -f -r -s"           # no bash built-in
+    local cmdl="/usr/bin/ln -f -r -s"       # no bash built-in
     [ -n "$CEN_OPT_FORCE" ] && cmdc="cp -preserve=mode,ownership --dereference"
     CEN_HISTORY='-'
 
@@ -663,7 +687,7 @@ actionLocal() {
             for argu in "$@" ; do
                 do_ignore ffil argu "$afld" && continue
                 do_filter "$ffil" || continue
-                frep="$afld+$argu" ; frep="$DAT_COND_DIST${frep//\//_}"
+                do_convert -d "$DAT_COND_DIST$ffil" frep
                 fsha="$DAT_SHARED/$frep"
                 [ "$acmd" = 'private' ] && fpri="$DAT_PRIVATE/$frep" || fpri="$fsha"
 
@@ -823,21 +847,6 @@ actionLocal() {
 
     local what="$1"                                     # condition
     [ "$what" = '@' ] && what+="$CEN_ACTION"
-
-    # run get and put for action 'over'
-#    if [ "$CEN_ACTION" = "over" ] ; then
-#        case "$what" in
-#        @pull)      CEN_ACTION='get' ; over=3 ; what= ;;
-#        @push)      CEN_ACTION='put' ; over=4 ; what= ;;
-#        @*)         invoke -e "Invalid sub-command" "$what" ; return ;;
-#        *)          CEN_ACTION='get' ; over=1
-#                    do_parse ___output "$what"
-#                    CEN_ACTION='put' ; over=2
-#                    remove "$CEN_ROOT/persistent/"* \
-#                           "$CEN_ROOT/transient/"*      # remove cached config
-#        esac
-#    fi
-
     do_parse ___output "$what"                          # parse and run
 }
 
@@ -1124,7 +1133,7 @@ actionCheck() {
             for argu in "$@" ; do
                 do_ignore ffil argu "$afld" && continue
                 ___outdup "$ffil"
-                path="$afld+$argu" ; path="${path//\//_}"
+                do_convert -d "$ffil" path
                 ___checks "$DAT_COND_DIST"
             done
         fi
@@ -1249,7 +1258,7 @@ actionList() {
             for argu in "$@" ; do
                 do_ignore ffil argu "$afld" && continue
                 do_filter "$ffil" || continue
-                frep="$afld+$argu" ; frep="$DAT_COND_DIST${frep//\//_}"
+                do_convert -d "$DAT_COND_DIST$ffil" frep
                 fsha="$DAT_SHARED/$frep"
                 [ "$acmd" = 'private' ] && fpri="$DAT_PRIVATE/$frep" || fpri="$fsha"
                 compare "$ffil" "$fpri" "$fsha"

@@ -1,25 +1,36 @@
 #!/bin/bash
 # ------------------------------------------------------------------------------
-CEN_LEGAL="Dr. Jürgen Pfennig (c) 2021-2023; BSD License"
+CEN_LEGAL="Dr. Jürgen Pfennig (c) 2021-2024; BSD License"
 CEN_TITLE="Centauri initialization helper and launcher for appliances"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -v -y - '0.03:2' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -v -y - '0.04:2' || exit 2
 
 CEN_SVC_WANTED_BY='sysinit.target'
 
 # This service type does not use actionStop.
 CEN_SVC_TYPE='once'
 
+# no root user check for custom commands
+CEN_SVC_NOROOT=1
+
+# folder for issue data
+DAT_ISSUE_DIR="$CEN_ROOT/persistent/issue.d"
+
 # ------------------------------------------------------------------------------
 # appliances configuration support
 # ------------------------------------------------------------------------------
 
+# array filled in get_appliances() ...
 DAT_APPL_LABEL=
 DAT_APPL_LEVEL=
 DAT_APPL_MODE=
 DAT_APPL_CONF=
 DAT_APPL_ARGS=
+DAT_APPL_AUTO=
+
+# homeassistant user
+DAT_APPL_HASS='homeassistant'
 
 # dummy function to skip 'appliance' config lines
 appliance() { : ; }
@@ -32,18 +43,20 @@ get_appliances() {
         set -f ; eval set -- $1 ; set +f
 
         # user kiosk or homeassistant must exist for these appliances
-        if [ "$5" = 'hass' ] ; then
-            system -q -r -- getent passwd 'homeassistant' || return 0
-        elif [ "$6" = 'centaurilogin=kiosk' ] ; then
-            system -q -r -- getent passwd 'kiosk' || return 0
+        local auto
+        if [[ "$6" == *centaurilogin=* ]] ; then
+             auto="${6#*centaurilogin=}" ; auto="${auto%% *}"
+             system -q -r -- getent passwd "$auto" || return 0
         fi
 
         DAT_APPL_LABEL+=("$2") ; DAT_APPL_LEVEL+=("$3")
-        DAT_APPL_MODE+=("$4") ; DAT_APPL_CONF+=("$5") ; DAT_APPL_ARGS+=("$6")
+        DAT_APPL_MODE+=("$4") ; DAT_APPL_CONF+=("$5")
+        DAT_APPL_ARGS+=("$6") ; DAT_APPL_AUTO+=("$auto")
     }
 
     DAT_APPL_LABEL=() ; DAT_APPL_LEVEL=()
-    DAT_APPL_MODE=() ; DAT_APPL_CONF=() ; DAT_APPL_ARGS=()
+    DAT_APPL_MODE=() ; DAT_APPL_CONF=()
+    DAT_APPL_ARGS=() ; DAT_APPL_AUTO=()
     configfile -r ___appl_reader || return 1
     [ -n "$DAT_APPL_LABEL" ] && return 0
     invoke -w "Found no 'appliance' definitions" ; return 1
@@ -53,6 +66,13 @@ get_appliances() {
 cfg_appliances() {
     local indx frmt acmd labl
     case "$1" in
+    0)      [ "$CEN_ACTION" = 'default' ] || return
+            if [ -d '/boot/efi/loader' ] ; then
+                embed -v centauriefilinux -y menu 90 default 5
+            else
+                embed -v centauriraspi -y default
+            fi ; return
+            ;;
     [1-9])  indx="$(($1 - 1))"
             if [ -z "${DAT_APPL_LABEL[indx]}" ] ; then
                 invoke -e "Invalid appliance index:" "$1" ; return
@@ -70,33 +90,45 @@ cfg_appliances() {
     esac
     confirm -a -y -f "$frmt" "${DAT_APPL_LABEL[indx]}" || return
 
+   ### listsearch must be uniq does not work
+
     local name swit args=()
     if [ "$acmd" = 'create' ] ; then
         [ -n "${DAT_APPL_MODE[indx]#-}" ] && swit="${DAT_APPL_MODE[indx]}"
         [ -n "${DAT_APPL_CONF[indx]#-}" ] && swit="${swit:-smart}:${DAT_APPL_CONF[indx]}"
-        [ -n "$swit" ] && args+=("centauriswitch=$swit") || args+=('-')
+        [ -n "$swit" ] && args+=("centauriswitch=$swit") #|| args+=('-')
         [ -n "${DAT_APPL_ARGS[indx]}" ] && args+=("${DAT_APPL_ARGS[indx]}")
         [ -n "${DAT_APPL_LEVEL[indx]}" ] && args+=("systemd.unit=runlevel${DAT_APPL_LEVEL[indx]}.target")
         # must register to launch the menu ...
-        [ "${DAT_APPL_ARGS[indx]::14}" = 'centaurilogin=' ] &&
-            embed -t -v centauristartup install
+        [ -n "${DAT_APPL_AUTO[indx]}" ] && embed -t -v centauristartup install
     fi
 
-    labl="${DAT_APPL_LABEL[indx]}"
     if [ -d '/boot/efi/loader' ] ; then
         acmd="4$((indx + 1))"
         case "$CEN_ACTION" in
-            enable)      embed -v centauriefilinux -y menu --- "$acmd" create "$labl" "${args[@]}" ;;
+            enable)      name="${DAT_APPL_LABEL[indx]}"
+                         embed -v centauriefilinux -y menu --- "$acmd" create "$name" "${args[@]}" ;;
             disable)     embed -v centauriefilinux -y menu --- "$acmd" delete ;;
             *)           embed -v centauriefilinux -y menu --- "$acmd" default
         esac
     elif [ -d '/boot/firmware' ] ; then
-        name="${DAT_APPL_CONF[indx]}"
-        [ "${name:--}" = '-' ] && name="${DAT_APPL_MODE[indx]}"
-        [ "${name:--}" = '-' ] && name='bootmenu'
-        [ "$name" = 'hass' ] && acmd='minimal' || acmd=
+        name="${DAT_APPL_CONF[indx]}" ; acmd=
+        if [ "$name" = 'disabled' ] ; then
+            name='bootmenu' ; swit='splash'
+        elif [ "$name" = '-' ] ; then
+            name='kiosk' ; swit='splash'
+        else
+            swit='nosplash'
+        fi
+        if [ "${DAT_APPL_AUTO[indx]}" = "$DAT_APPL_HASS" ] ; then
+            [ "${name:--}" = '-' ] && name="hass" || name="hass-${name::3}"
+            acmd='minimal'
+        else
+            [ "${name:--}" = '-' ] && name="${DAT_APPL_MODE[indx]}"
+            [ "${name:--}" = '-' ] && name='bootmenu'
+        fi
         case "$CEN_ACTION" in
-            enable)      embed -v centauriraspi -y entry  --- "$name" ;;
+            enable)      embed -v centauriraspi -y entry  --- "$name" + "$swit" "${args[@]}" ;;
             disable)     embed -v centauriraspi -y remove --- "$name" ;;
             *)           embed -v centauriraspi -y config --- "$name" "$acmd" ;;
         esac
@@ -132,26 +164,31 @@ run_appliances() {
     auto="${word#*=}"
     trace -a -c "centaurilogin" -- "$auto"
 
-    if [ -n "$auto" ] ; then
-        message -a -c "Autologin mode" "$auto"
-        return                                  # see centauriautologin service
-    fi
-
     case "$netw" in
         router:*)   ;;
         switch:*)   ;;
-        *:hass)     word='home'
-                    create -t -v word -- "$CEN_ROOT/persistent/centaurifilter-override"
-                    ;;
-        *)          return                      # no match, do nothing
+        *)          netw=                       # no network services
     esac
-    message -a -c "Appliance mode" "$netw"
-    if [ "$levl" = 'runlevel2' ] ; then
-        runservice -e -n start networking centauriswitch
-    else
-        runservice -e -n start centauriswitch
+    message -a -c "Appliance mode" "${netw:-$auto}"
+
+    if [ -z "$netw" ] ; then
+        :
+    elif [ "$levl" = 'runlevel2' ] ; then
+        # networking is not configured in runlevel2
+        system -e -p -- systemctl --no-block start networking
     fi
-    system -w -p -- systemctl start anacron.timer
+
+    # centaurilogin action ...
+    if [ "$auto" = "$DAT_APPL_HASS" ] ; then
+        message -a "Starting centaurihass service"
+        system -e -p -- systemctl --no-block start centaurihass
+    elif [ -n "$auto" ] ; then
+        message -a -c "Autologin user" "$auto"
+        system -e -p -- systemctl --no-block start centauriautologin@"$auto"
+    fi
+
+    # enable anacron and swap ...
+    system -w -p -- systemctl --no-block start anacron.timer centauriswap
 }
 
 # ------------------------------------------------------------------------------
@@ -175,7 +212,7 @@ run() {
 # action config: [<appl>]
 # ------------------------------------------------------------------------------
 actionConfig() {
-    local indx=0 icfg wrds="quit" opti optw
+    local indx=0 icfg frst=1 wrds="quit" opti optw
     get_appliances || return
 
     if [ $# -gt 0 ] ; then
@@ -183,9 +220,23 @@ actionConfig() {
     fi
 
     message -m "Configured appliances are:" ''
+    if [ "$CEN_ACTION" = 'default' ] ; then
+        message -i "0:" "Default boot mode"
+        wrds+=' 0' ; frst=0
+    fi
     while [ -n "${DAT_APPL_LABEL[indx]}" ] ; do
-        opti="${DAT_APPL_CONF[indx]}"
-        [ -z "$opti" ] && opti="${DAT_APPL_MODE[indx]}"
+        if [ -n "${DAT_APPL_AUTO[indx]}" ] ; then
+            case "${DAT_APPL_MODE[indx]}" in
+            router|switch)
+                opti="${DAT_APPL_MODE[indx]}" ;;
+            *)
+                opti='-'
+            esac
+        else
+            opti="${DAT_APPL_CONF[indx]}"
+            [ -z "$opti" ] && opti="${DAT_APPL_MODE[indx]}"
+        fi
+
         if [ "$opti" = '-' ] ; then
             opti=
         elif netoption "$opti" ; then
@@ -193,7 +244,7 @@ actionConfig() {
         else
             opti=' [*]' ; optw=1
         fi
-        wrds+=" $indx" ; ((indx += 1))
+        ((indx += 1)) ; wrds+=" $indx"
         message -i "$indx:" "${DAT_APPL_LABEL[indx-1]}$opti"
     done
     message -i ' '
@@ -203,9 +254,8 @@ actionConfig() {
                       "    file '/etc/default/centaurinetcfg' to enable it." ''
     fi
     [ "$CEN_ACTION" = 'list' ] && return
-    ((indx -= 1))
     while ! confirm -p - -s icfg -v "$wrds" \
-            "Select an Appliance or hit <return> when finished [1..$indx]" ; do
+            "Select an Appliance or hit <return> when finished [$frst..$indx]" ; do
         if [ "$CEN_ACTION" = 'default' ] ; then
             CEN_ACTION='enable'  ; cfg_appliances "$icfg"
             CEN_ACTION='default' ; cfg_appliances "$icfg"
@@ -216,17 +266,92 @@ actionConfig() {
 }
 
 # ------------------------------------------------------------------------------
+# action config:    add   <file> <args>     # must be execute to have args
+#                   clear                   # no args
+#                   exec                    # no args
+#                   test  <wtim>            # optional arg
+# ------------------------------------------------------------------------------
+actionIssue() {
+    local fldr="$DAT_ISSUE_DIR" cmd3="${1::3}" arg0="$2" arg1="$3"
+    [ "$cmd3" = 'tes' ] || context -r
+    case "$#$cmd3" in
+    2add)   folder -f -m -- "$fldr" ; copy -a -- "$2" "$fldr" ; return
+            ;;
+    ?add)   sysfind -f -s arg0 -- "$arg0"
+            arg1="${2##*/} ${*:3}" ; arg1="${arg1//[\.\/[:space:]]/_}"
+            folder -f -m -- "$fldr"
+            local list=("#!$BASH" "$arg0 ${*:3}")
+            create -v list -c "$fldr/$arg1" 775 ; return
+            ;;
+    1cle)   remove -d -- "$fldr" ; return
+            ;;
+    1exe)   ;;
+    1tes)   [ -d "$fldr" ] || quit 1 ; return
+            ;;
+    2tes)   if [ "$arg0" = '-' ] ; then
+                [ -d "$fldr" ] || return
+                system -e -p -u - -- systemctl start centauriissue
+                return
+            fi
+            while [ "$arg0" -gt 0 ] ; do
+                [ -d "$fldr" ] || break
+                timer -w 1 ; ((arg0 -= 1))
+            done ; return
+            ;;
+    *)      invoke -e "Invalid arguments: %s" "$*"
+    esac
+
+    ## no active session - wait a little to let boot message drain
+    if runservice status 'sddm' || runservice status 'lightdm' ; then
+        timer -w 1
+    else
+        timer -w 5
+    fi
+
+    setupcon --current-tty
+    local item
+    for item in "$fldr"/* ; do
+        if [ -x "$item" ] ; then
+            "$item"
+        else
+            cat "$item"
+            read -N1 -p $"Press any key to continue"
+        fi
+        remove -- "$item"
+        clear
+    done
+    system -q -- rmdir "$fldr"
+
+    # some heuristics to find the 'right' active session
+    local sesa sesn sesi
+    system -q -a sesa loginctl list-sessions --no-legend || return
+    for sesn in "${sesa[@]}" ; do
+        set -- $sesn
+        [ "${4::4}" = 'seat' ] || continue
+        sesi="$1"
+        [ "${5::3}" = 'tty' ] || continue
+        sesi="$1" ; break
+    done
+
+    [ -n "$sesi" ] && system -e -p loginctl activate "$sesi" && return
+    read -N1 -p $"Cannot find active console, use <Alt><Fn> to switch manually"
+    system -q chvt 1
+}
+
+# ------------------------------------------------------------------------------
 # action parsing: <verb> <argument>...
 # ------------------------------------------------------------------------------
 actions() {
     case "$1" in
 
     def*)
-        invoke    'default'    actionConfig 0 1 ;;  # one optional arg
+        invoke -r 'default'    actionConfig 0 1 ;;  # one optional arg
     dis*)
-        invoke    'disable'    actionConfig 0 1 ;;  # one optional arg
+        invoke -r 'disable'    actionConfig 0 1 ;;  # one optional arg
     ena*)
-        invoke    'enable'     actionConfig 0 1 ;;  # one optional arg
+        invoke -r 'enable'     actionConfig 0 1 ;;  # one optional arg
+    iss*)
+        invoke    'issue'      -            1 + ;;  # at least one arg
     lis|list)
         invoke    'list'       actionConfig 0 ;;    # no args
 
@@ -249,8 +374,16 @@ usage() {
         -a 'disable  <appl>'    "[*] disable an appliance in boot menu" \
         -a 'enable   <appl>'    "[*] enable an appliance in boot menu" \
         -a - \
+        -a 'issue add  [<args>]' "add a issue file or an exucutable" \
+        -a 'issue clear'         "remove any pending issues" \
+        -a 'issue execute'       "show or run issues, used by 'centaurissues.service'" \
+        -a 'issue test [<wtim>]' "test for pending service, can wait until done" \
+        -a - \
         -a "[*] these actions use the 'centauriefilinux' or 'centauriraspi' tools." \
         -a "    Grub's boot menu must be adapted manually (if used at all)."
+
+    usageset \
+        -p '<appl>'              "appliance name or index (see 'list' action)" \
 
     usageset \
         -t "While linux servers or workstations typically launch a stack of network" \
@@ -262,7 +395,19 @@ usage() {
         -t "named 'appliances' can be added to configure supported appliances." \
         -t - \
         -t "Appliances use <conf> from the 'centauriswitch=<mode>:<conf>' kernel boot cmd" \
-        -t "to start services and other things via '${CEN_PRETTYPATH%/*}/centauriswitch'."
+        -t "to start services and other things via '${CEN_PRETTYPATH%/*}/centauriswitch'." \
+        -t - \
+        -l "issue" \
+        -t "This mechanism can run programs or show messages on a concole before any" \
+        -t "GUI tool gets started. This is done via service 'centauriissue' that runs" \
+        -t "'$CEN_NAME execute' when '$DAT_ISSUE_DIR' exists." \
+        -t - \
+        -t "The 'lightdm' and 'sddm' display manager services have override files to" \
+        -t "run 'centauristartx' before starting the dm. This tool checks for pending" \
+        -t "issues to prevent the dm to switch away from the issues console." \
+        -t - \
+        -t "Finally 'centaurisession' (which runs at login) checks for pending issues" \
+        -t "and can run a user notification."
 }
 
 # ------------------------------------------------------------------------------

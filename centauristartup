@@ -5,15 +5,15 @@ CEN_TITLE=$"Network mode and GUI selection menu"
 
 PATH+=":${0%/*}" . _centauri_bash_lib  -a -d -t - '0.02:2' 1 || exit 2
 
+# invoke 'menu' action if called via .autologin symlink (see centaurisession)
 if [ "$CEN_NAME" = '.autologin' ] ; then
     CEN_NAME='centauristartup'
     [ $# = 0 ] && set -- menu
-else
-    [ $# = 0 ] && set -- --help
 fi
 
 # global data
 
+CEN_OPT_HASS=                   # see --hass
 CEN_OPT_KIOSK=                  # see --kiosk
 
 DAT_LOGIN='centaurilogin'
@@ -22,10 +22,10 @@ DAT_AUTOLOGIN=                  # see check_autologin
 
 # Kernel cmd line: centauriswitch=router centaurilogin=local
 #
-#       centaurilogin=local        -> menu
-#       centaurilogin=local        -> centauristartx -S startx -U local
-#       centaurilogin=kiosk        -> centauristartx -S startx -U kiosk
-
+#       centaurilogin=local         -> menu
+#       centaurilogin=local         -> centauristartx -S startx -U local
+#       centaurilogin=kiosk         -> centauristartx -S startx -U kiosk
+#       centaurilogin=homeassistant -> (noop, do not run agetty)
 # ------------------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------------------
@@ -179,15 +179,21 @@ actionDesktop() {
 # Install/uninstall: -no args-
 # ------------------------------------------------------------------------------
 actionInstall() {
-    system -q -- systemctl disable 'centauriautologin@'
-    system -q -- systemctl disable 'centauriautologin@tty6' # legacy
     if [ "$CEN_ACTION" = 'install' ] ; then
-        system -e -p -- systemctl enable  "$CEN_ROOT/systemd/system/centauriautologin@.service"
-        [ -d ~local ] && symlink -- "$CEN_TOOLS/$CEN_NAME" ~local/'.autologin'
-        [ -d ~kiosk ] && symlink -- "$CEN_TOOLS/$CEN_NAME" ~kiosk/'.autologin'
+        if [ ! "$CEN_TOOLS/$CEN_NAME" -ef ~local/'.autologin' ] && [ -d ~local ] ; then
+            symlink -n -- "$CEN_TOOLS/$CEN_NAME" ~local/'.autologin'
+            system -e -p -- systemctl enable  "$CEN_ROOT/systemd/system/centauriautologin@local.service"
+        fi
+        if [ ! "$CEN_TOOLS/$CEN_NAME" -ef ~kiosk/'.autologin' ] && [ -d ~kiosk ] ; then
+            symlink -n -- "$CEN_TOOLS/$CEN_NAME" ~kiosk/'.autologin'
+            system -e -p -- systemctl enable  "$CEN_ROOT/systemd/system/centauriautologin@kiosk.service"
+        fi
+        [ -d ~homeassistant ] &&
+                         symlink -n -- "$CEN_TOOLS/$CEN_NAME" ~homeassistant/'.autologin'
     else
-        [ -d ~local ] && remove ~local/'.autologin'
-        [ -d ~kiosk ] && remove ~kiosk/'.autologin'
+        remove ~local/'.autologin' ~kiosk/'.autologin' ~homeassistant/'.autologin'
+        system -q -- systemctl disable  "$CEN_ROOT/systemd/system/centauriautologin@local.service"
+        system -q -- systemctl disable  "$CEN_ROOT/systemd/system/centauriautologin@kiosk.service"
     fi
 }
 
@@ -210,6 +216,10 @@ actionMaintenance() {
 # Show menu
 # ------------------------------------------------------------------------------
 actionMenu() {
+    if [ -n "$CEN_OPT_HASS" ] ; then
+        system -u - -e -- systemctl --no-block start centaurihass
+        quit "centaurilogin=homeassistant was executed"
+    fi
     local mnet mgui cnet cgui tout sesn temp
 
     system -c -f dialog                 # cannot run without it
@@ -233,6 +243,9 @@ actionMenu() {
         [ "$temp" = 1 ] && message "waiting for service 'centauriswitch' ..."
         timer -w "$temp"
     done
+
+    # handle pending issue
+    embed centaurisysinit issue test -
 
     [ "$CEN_OPT_KIOSK" = 0 ] && cgui='desktop'
     [ "$CEN_OPT_KIOSK" = 1 ] && cgui='kiosk'
@@ -332,16 +345,19 @@ actionWorkstation() {
 options() {
     case "$CEN_ACTION" in
 
-    "")     if [ -z "$CEN_OPT_KIOSK" ] ; then   # use kernel command line
+    '')     if [ -z "$CEN_OPT_KIOSK" ] ; then   # use kernel command line
                 local wrds word
                 read -r -a wrds </proc/cmdline
                 listsearch -c -m word -u -i wrds -- 'centaurilogin'
                 case "$word" in
                 *=local)    CEN_OPT_KIOSK=0 ;;
-                *=kiosk)    CEN_OPT_KIOSK=1
+                *=kiosk)    CEN_OPT_KIOSK=1 ;;
+                *=home*)    CEN_OPT_HASS=1 ;;
                 esac
             fi ;;
 
+    -H|--has*)
+        optarg 'hass'       - -f ;;     # flag
     -K|--kio*)
         optarg 'kiosk'      - -o ;;     # ternary
 

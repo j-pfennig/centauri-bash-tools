@@ -1,14 +1,14 @@
 #!/bin/bash
 # ------------------------------------------------------------------------------
-CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2016-2022; BSD License"
-CEN_TITLE="Backup Btrfs Volumes to Archive Disk"
+CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2016-2024; BSD License"
+CEN_TITLE="Backup Btrfs Volumes to Archive Disk using 'centauricopy'"
 
 # include boot folder
 # excludes (sddm/cache)
 # TODO mount status in $CEN_ROOT/transient
 # TODO /etc/default/centaurimirror
 
-PATH=+":${0%/*}" . _centauri_bash_lib -a -d -i -m bat -s -y "$0" "0.24" || exit 2
+PATH=+":${0%/*}" . _centauri_bash_lib -a -d -i -m bat -s -y - '0.25:2' || exit 2
 
 # Data
 CEN_OPT_ALL=                    # see --all
@@ -136,18 +136,29 @@ remote() {
 }
 
 # ------------------------------------------------------------------------------
-# check/make destination folder: [-q|-s|-t]
+# check/make destination folder: [-q|-s|-t|-v]
+#
+#       -q      quiet, no 'not found' error message
+#       -s      status, set DAT_STATUSDIR and return
+#       -t      test, don't set DAT_DESTINATION and don't change folder
+#       -v      volume, get volume name, set DAT_DESTINATION and return status
 # ------------------------------------------------------------------------------
 destination() {
-    local dest ; DAT_DESTINATION= ; DAT_STATUSDIR=
-    for dest in "Computers" "Volumes/Shared" "Shared" "Volumes/Backup" "Backup" "Volumes" "." "" ; do
+    local dest vols sdir
+    DAT_DESTINATION= ; DAT_STATUSDIR=
+    [ "$1" = '-v' ] || sdir="/.$CEN_NAME"
+    [ -d "$CEN_MOUNT_DIR/Volumes" ] && vols='Volumes/'
+    for dest in 'Computers' 'Backup' 'Data' ${sdir:+.} '' ; do
         [ -z "$dest" ] && break
-        dest="$CEN_MOUNT_DIR/$dest/.$CEN_NAME"
+        dest="$CEN_MOUNT_DIR/$vols$dest$sdir"
         dest="${dest/\/.\//\/}"
         [ -d "$dest" ] && break
     done
 
-    if [ -z "$dest" ] ; then
+    if [ "$1" = '-v' ] ; then
+        [ -z "$dest" ] && return 1
+        DAT_DESTINATION="$dest" ; return 0
+    elif [ -z "$dest" ] ; then
         [ "$1" = "-q" -o "$1" = "-t" ] && return 1
         fatal "Cannot find '.$CEN_NAME' at '${CEN_MOUNT_DIR:-<no mount>}'"
     else
@@ -157,7 +168,7 @@ destination() {
 
     DAT_DESTINATION="${dest%/*}"
     [ "${DAT_DESTINATION##*/}" = "Volumes" ] && return 0
-    [ "$1" = "-t" -o "$CEN_OPT_NAME" = "-" ] && return 0        # legacy --name=-
+    [ "$1" = "-t" -o "$CEN_OPT_NAME" = '-' ] && return 0        # legacy --name=-
     DAT_DESTINATION+="/${CEN_OPT_NAME:-$HOSTNAME}"
     folder -f -m "$DAT_DESTINATION" ; return 0
 }
@@ -210,7 +221,7 @@ history() {
     if [ $# -le 1 ] ; then
         if [ ! -r "$dest" ] ; then
             error "Cannot read from: $dest"
-        elif [ "${1:--}" = "-" ] ; then
+        elif [ "${1:--}" = '-' ] ; then
             system -e cat "$dest"
         else
             system -e grep -e "$1" "$dest"
@@ -223,7 +234,7 @@ history() {
             error "Cannot write to: $dest"
         else
             local name="$HOSTNAME"
-            [ "${CEN_OPT_NAME:--}" = "-" ] || name="$CEN_OPT_NAME"
+            [ "${CEN_OPT_NAME:--}" = '-' ] || name="$CEN_OPT_NAME"
             shift
             printf "%s %-10s %s\n" "$(date +"%Y-%m-%d %T")" "$name" "$*" >> "$dest"
         fi
@@ -325,7 +336,7 @@ runplain() {
 }
 
 # ------------------------------------------------------------------------------
-# system rename: [<name>]
+# system rename: -no args-
 # ------------------------------------------------------------------------------
 sysrename() {
     remote "rename" && return                   # invoked as subroutine?
@@ -340,7 +351,7 @@ sysrename() {
             labl="${item##*/}" ; labl="${labl%%_*}" ; break
         done
     fi
-    [ "${CEN_OPT_NAME:--}" = "-" ] && name="$labl" || name="$CEN_OPT_NAME"
+    [ "${CEN_OPT_NAME:--}" = '-' ] && name="$labl" || name="$CEN_OPT_NAME"
 
     # get boot label
     local cdsk lboo cboo dboo="${CEN_MOUNT_DEV%[0-9]}1"
@@ -519,7 +530,7 @@ actionDedup() {
         PATH+=":$inst" ; export PATH
     fi
     for ddup in duperemove bedup - ; do
-        if [ "$ddup" = "-" ] ; then
+        if [ "$ddup" = '-' ] ; then
             invoke -e "neither 'duperemove' nor 'bedup' is installed"
             [ "$CEN_ACTION" != "dedup" ] && return
             error -s 2 ; return
@@ -568,21 +579,22 @@ actionMount() {
 actionPrepare() {
     remote "prepare" "$@" && return
     mounter -m
+
     local dest vols path="${1:--}"
     [ "$path" = "+" ] && path="Volumes"
-    if [ "$path" = "-" ] ; then
-        [ "$CEN_OPT_NAME" = "-" ] && vols="Volumes"             # legacy --name=-
-        for path in $vols "Computers" "Volumes/Shared" "Shared" "Volumes/Backup" "Backup" "" ; do
-            [ -z "$path" ] && error "Cannot find possible destination"
-            [ -d "$CEN_MOUNT_DIR/$path" ] && break
-        done
-        path="$CEN_MOUNT_DIR/$path"
+    if [ "$path" = '-' ] ; then
+        if destination -v ; then
+            path="$DAT_DESTINATION"
+        else
+            error "Cannot find destination, try to create a 'Computers' folder/subvol"
+        fi
     else
-        [ "${path::1}" = "/" ] || path="$CEN_MOUNT_DIR/$path"
-        [ -d "$path" ] || error "Not a valid destination: $path"
+        [ "${path::1}" = '/' ] || path="$CEN_MOUNT_DIR/$path"
+        [ -d "$path" ] || error "Not a valid destination:" "$path"
     fi
     error -t || return
     path="${path%/.}"
+    message -a -c "Using destination" "$path"
 
     if destination -t ; then
         if [ "$DAT_DESTINATION" -ef "$path" ] ; then
@@ -613,7 +625,7 @@ actionPrepare() {
 }
 
 # ------------------------------------------------------------------------------
-# action rename: [<name>]
+# action rename: -no args-
 # ------------------------------------------------------------------------------
 actionRename() {
     remote "rename" && return
@@ -676,29 +688,28 @@ actionVolumes() {
 # option parsing
 # ------------------------------------------------------------------------------
 options() {
-
     case "$1" in
-    "")
+    '')
         [ "${#CEN_CMDARGS[@]}" -gt 0 ] && initialize
                                            ;;   # do inits
     -A|--all)
-        optarg "all"    CEN_OPT_ALL        ;;   # simple flag
+        optarg 'all'    CEN_OPT_ALL        ;;   # simple flag
     -B|--bas|--base)
-        optarg "base"   CEN_OPT_BASE   -d  ;;   # existing folder
+        optarg 'base'   CEN_OPT_BASE   -d  ;;   # existing folder
     -D|--dev*)
-        optarg "device" CEN_OPT_DEVICE -t  ;;   # any text
+        optarg 'device' CEN_OPT_DEVICE -t  ;;   # any text
     -L|--lab*)
-        optarg "label"  CEN_OPT_LABEL  -t  ;;   # any text
+        optarg 'label'  CEN_OPT_LABEL  -t  ;;   # any text
     -M|--mou*)
-        optarg "mount"  CEN_OPT_MOUNT  -t  ;;   # any test
+        optarg 'mount'  CEN_OPT_MOUNT  -t  ;;   # any test
     -N|--nam|--name)
-        optarg "name"   CEN_OPT_NAME   -t  ;;   # any text
+        optarg 'name'   CEN_OPT_NAME   -t  ;;   # any text
     -O|--opt*)
-        optarg "option" CEN_OPT_OPTION[] -t ;;
+        optarg 'option' CEN_OPT_OPTION[] -t ;;
     -R|--rem*)
-        optarg "remote" CEN_OPT_REMOTE -t  ;;   # any text
+        optarg 'remote' CEN_OPT_REMOTE -t  ;;   # any text
     -S|--sou*)
-        optarg "source" CEN_OPT_SOURCE -t  ;;   # any text
+        optarg 'source' CEN_OPT_SOURCE -t  ;;   # any text
     esac
 }
 
@@ -708,33 +719,33 @@ options() {
 actions() {
     case "$CEN_ACTION" in
     che*)
-        invoke    "check"   -  0 ;;
+        invoke    'check'   -  0 ;;
     cop|copy)
-        invoke -r "copy"    -  0 ;;
+        invoke -r 'copy'    -  0 ;;
     ded*)
-        invoke -r "dedup"   -  0 1 ;;
+        invoke -r 'dedup'   -  0 1 ;;
     his*)
-        invoke    "history" -  0 + ;;
+        invoke    'history' -  0 + ;;
     mir*)
-        invoke -r "mirror"  actionCopy  0 ;;
+        invoke -r 'mirror'  actionCopy  0 ;;
     mou*)
-        invoke    "mount"   -  0 ;;
+        invoke    'mount'   -  0 ;;
     pre*)
-        invoke -r "prepare" -  0 1 ;;
+        invoke -r 'prepare' -  0 1 ;;
     ren*)
-        invoke -r "rename"  -  0 ;;
+        invoke -r 'rename'  -  0 ;;
     run)
-        invoke    "run"     -  0 + ;;
+        invoke    'run'     -  0 + ;;
     sta*)
-        invoke    "status"  -  0 ;;
+        invoke    'status'  -  0 ;;
     syn*)
-        invoke -r "sync"    actionCopy  0 ;;
+        invoke -r 'sync'    actionCopy  0 ;;
     unm*|umo*)
-        invoke    "umount"  -  0 ;;
+        invoke    'umount'  -  0 ;;
     upd*)
-        invoke -r "update"  actionCopy  0 ;;
+        invoke -r 'update'  actionCopy  0 ;;
     vol*)
-        invoke    "volumes" -  0 ;;
+        invoke    'volumes' -  0 ;;
     esac
 }
 
@@ -746,10 +757,12 @@ usage() {
 $CEN_USE_HEADER
 
        Copies the volumes Archive, Backup, Export, Shared and VBox to a backup
-       location (disk).
+       location (disk). The destination should be a device formatted with a
+       'btrfs' filesystem having a 'Volumes' sub-volume, see 'centaurimedia'.
 
-       The system volumes Root and Home are not directly backed up by default,
-       their content should be in Backup archive files.
+       The system volumes Root and Home are not included up by default, see
+       option '--all'. An archive can hold a 'clone' of a single host or can
+       backup multiple hosts (see action 'prepare +' and 'prepare -').
 
        When using multiple actions on a remote location explicit use of 'mount'
        and 'umount' is recommended for efficiency.
@@ -772,13 +785,15 @@ actions:
        sync                 [*] update disk, delete data no longer in source
        update               [*] write newer data to disk (not deleting)
 
-       dedup                deduplicate disk
+       dedup                deduplicate disk (for 'btrfs' filesystem only)
        history [<regex>]    show copy history
        mount                mount disk (until umount)
+       prepare [<path>|-|+]
+                            configure disk: '+' to clone a single host,
+                                            '-' to backup multiple hosts
+       rename  <name>       rename a cloned system
        run     [<prog> [<args>...]]
                             run a program at Mountpoint      (default: bash -i)
-       prepare [<path>|-|+]
-                            configure disk: '+' to clone, '-' to backup
        status               show disk status
        umount               unmount disk
        volumes              show volumes for host on backup disk
@@ -786,11 +801,18 @@ actions:
        [*] see centauricopy for details on copy|mirror|sync|update
 
 examples:
+       centaurimedia --device=/dev/sdc partion gpt + \\
+                     -- format volume arch5            # format a archive disk
        $CEN_NAME -L arch5 -M /mnt/xxx mount       # mount arch5_vol0
        $CEN_NAME -L arch5 prepare -               # prepare a backup disk
-       $CEN_NAME -L arch5 prepare +               # prepare a clone disk
-       $CEN_NAME -L arch5 sync -- dedup -- umount # sync, dedup and unmount
 
+       centaurimedia --device=sdc system clone5        # format a clone disk
+       $CEN_NAME -L clone5 -M /mnt/xxx mount      # mount arch5_vol0
+       $CEN_NAME -L clone5 prepare +              # prepare a clone disk
+       $CEN_NAME -L clone5 sync --all             # copy data
+       $CEN_NAME -L clone5 -N clone5 rename       # rename cloned systemd
+
+       $CEN_NAME -L arch5 sync -- dedup -- umount # sync, dedup and unmount
        $CEN_NAME -D sdc3 -B batch dedup -- status # batch, automount ... unmount
 
        $CEN_NAME -L arch5 mount -- status         # keep mounted
@@ -799,7 +821,6 @@ examples:
 
        $CEN_NAME -R alpha:/tmp/xxx -b batch copy  # run remote and as batch
        $CEN_NAME -R alpha:/tmp/xxx -b batch mount -- copy -- dedup -- umount
-
 !EOF
 }
 

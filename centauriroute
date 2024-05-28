@@ -192,11 +192,6 @@ do_address() {
     fi
 
     [ "$ipvx" = 4 ] && return
-#    if nettool -6 status && netoption 'ipv6' "${netn%-[0-9]}" ; then
-#        :
-#    else
-#        trace -a -p "No ipv6 for '%s': %s" "$ifac" "$neti" ; return
-#    fi
     do_ipv6chk "$netn" || return
 
     netconv -m -- "$netm" &&
@@ -701,6 +696,12 @@ do_extender() {
     local mode="$1" iins iout
     netiface -e -s iins -x "$2" || return 1     # trunk is inside
     netiface -e -s iout -x "$3" || return 1     # extension is outside
+
+    message -a -p "Extender %s (inside) to %s (outside)" "$iins" "$iout"
+    nettool -d "$iins" up
+    do_setmetric 'sysrun' -4 "$iins" 100 2
+    nettool -d "$iout" up
+
     local namp="$CEN_NAME-parp-$iins-$iout" \
           namd="$CEN_NAME-dhcp-$iins-$iout" \
           namn="$CEN_NAME-ndppd-$iins-$iout"
@@ -999,7 +1000,7 @@ do_setmetric() {
     local scmd="$1" imod="$2" ifce="$3" metr="$4"
 
     # optional sleep
-    [ "$5" != 0 ] && timer -w "$5"
+    [ "${5:-0}" != 0 ] && timer -w "$5"
 
     # for ipv4 'ifmetric' would be faster ...
     if [ "$imod" = '-4' ] && sysfind -c 'ifmetric' ; then
@@ -1215,9 +1216,6 @@ do_open() {
 
     # proxy mode runs parprouted and a special dnsmasq
     if [ "$iprx" != 'none' ] ; then
-        for ifce in "${iprx[@]}" ; do
-            nettool -d "$ifce" up
-        done
         do_extender 1 "${iprx[@]}"
     fi
 
@@ -1227,7 +1225,8 @@ do_open() {
         if [ "$DAT_SWITCH_MODE" != 'static' ] ; then
             trace "interface mode is not 'static'"
         elif [ "$ibri" = 'none' ] ; then
-            warning "interface mode 'static' without bridge: no IPv6 support"
+            nettool -6 status ||
+                warning "interface mode 'static' without bridge: no IPv6 support"
         else                                            # server with brigde ...
             local item imac                             # add ipv6 addresses to...
             ifce="$ibri"                                # ... the bridge (not the slaves)
@@ -1745,18 +1744,36 @@ actionIpv6() {
     local mode
     case "${1:-sta}" in
         on|off) mode="$1" ;;
-        aut*)   netoption 'ipv6' && mode='on' || mode='off' ;;
+        aut*)   netoption 'ipv6' && mode='chk' || mode='off' ;;
         sta*)   nettool -6 status
                 case $? in
                 0)  mode='on (enabled)' ;;
                 1)  mode='off (disabled)' ;;
                 *)  mode='unknown'
                 esac
-                message "ipv6 status:" "$mode"
+                message -c "IPv6 status" "$mode"
                 return ;;
         *)      invoke -e "state must be one of: on|off|auto|status"
                 return
     esac
+
+    if [ "$mode" = 'chk' ] ; then
+        local item know=0               # 0 no change,  1 disable ipv6, 2 ipv6 ok
+        netresolv -r
+        for item in "${_netresolv[@]:1}" ; do
+            $CEN_TRACE2 -a -c "IPv6 dns server" "$item"
+            nethost -- "$item" || continue                  # unknown host
+            know=1
+            netoption 'ipv6' "$_nethost_name" || continue   # no ipv6
+            $CEN_TRACE2 -a -c "IPv6 check..." "$_nethost_name".
+            sysrun -e -p -r -- ping -6 -c1 -q "$_nethost_name" || continue
+            $CEN_TRACE2 -a -c "IPv6 working" "$_nethost_name"
+            know=2 ; break
+        done
+        [ "$know" = 1 ] || return
+        mode='off' ; message "IPv6 disabled, connectivity check failed"
+    fi
+
     [ "$mode" = 'on' ] && DAT_IPV6_MODE=0 || DAT_IPV6_MODE=1
     nettool -6 "$mode" || invoke -e "failed ($1)"
 }
@@ -1791,6 +1808,13 @@ actionMetric() {
             background -s do_setmetric 'sysrun' -6 "$_addrchk_ifce" "$metr" "$wait"
         fi
     fi
+}
+
+# -----------------------------------------------------------------------------
+#
+# ------------------------------------------------------------------------------
+actionProxy() {
+:
 }
 
 # -----------------------------------------------------------------------------
@@ -2017,6 +2041,8 @@ actions() {
         invoke 'metric' -            1 5 ;;
     mod*)
         invoke 'mode'   actionInit   0 2 ;;
+    pro*)
+        invoke 'proxy'  -            0 1 ;;
     sma*)
         invoke 'smart'  -            0 2 ;;
     tun*)
@@ -2081,7 +2107,7 @@ arguments:
                    °   <mode> is used if not specified. Only the <mode>s static,
                    °   switch and router are allowed to set <conf>.
        <stat>      Must be one of: on|off|auto|status
-       <time>      wait time (floting point) in [s]
+       <time>      wait time (floating point) in [s]
 
 remarks:
        Even though $CEN_NAME can be run as a service, it is tpyically run
