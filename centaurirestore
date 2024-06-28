@@ -64,7 +64,7 @@ do_chk_block() {
 # check swap partition
 do_chk_swap() {
     [ "${CEN_FLG_SWAP:--}" = '-' ] && return 0
-    [ "${CEN_FLG_SWAP::1}" = "/" ] || CEN_FLG_SWAP="/dev/${CEN_FLG_SWAP#/dev/}"
+    [ "${CEN_FLG_SWAP::1}" = '/' ] || CEN_FLG_SWAP="/dev/${CEN_FLG_SWAP#/dev/}"
     do_chk_block "$CEN_FLG_SWAP"              # return status
 }
 
@@ -76,7 +76,7 @@ do_chk_part() {
         error "No root partition specified"
         return 1
     fi
-    [ "${CEN_FLG_PART::1}" = "/" ] || CEN_FLG_PART="/dev/${CEN_FLG_PART#/dev/}"
+    [ "${CEN_FLG_PART::1}" = '/' ] || CEN_FLG_PART="/dev/${CEN_FLG_PART#/dev/}"
     [ -n "$CEN_FLG_IMAGE" ] && return
     do_chk_block "$CEN_FLG_PART"              # return status
 }
@@ -343,7 +343,8 @@ do_rename() {
 }
 
 # ------------------------------------------------------------------------------
-# update grub and fstab: <name> [+]
+# update grub and fstab: (1) do_update <name>       # grub/efi/firmware only
+#                        (2) do_update <name> +     # ... also update fstab
 # ------------------------------------------------------------------------------
 do_update() {
     local name="${1:--}" what=() firm load
@@ -354,6 +355,7 @@ do_update() {
     local sgrb="${CEN_FLG_CLONE[3]:--}"             # 4th --clone is path of grub.cfg
     [ "$sboo" = '+' ] && sboo="$name"
     [ "$sdsk" = '+' ] && sdsk="$name"
+    trace -c -a 'update boot' "boot-label=%s  root-label=%s  grub-path=%s" "$sboo" "$sdsk" "$sgrb"
 
     # grub: <boot-mpt>/efi/grub
     # load: <boot-mpt>/efi/loader/entries
@@ -362,24 +364,27 @@ do_update() {
     if [ "$sgrb" = '+' ] ; then
         matchpath -e -d -o -s sgrb -- mnt/boot/{grub,efi,EFI} boot/{grub,efi,EFI}
     elif [ -n "$CEN_FLG_BOOT" ] ; then
-        matchpath -e -d -o -s sgrb -- ./{grub,efi,EFI}
+        matchpath -e -d -o -s sgrb -- ./{grub,efi,EFI} ./overlays
     fi
 
-    if [ -n "$sgrb" ] ; then
-        trace -a -c "Boot loader path" "$sgrb (base=$PWD)"
+    if [ "${sgrb:--}" = '-' ] ; then
+        if [ -n "$CEN_FLG_BOOT" ] ; then
+            error "No boot path not found" "(base=$PWD)" ; return
+        fi
+        sgrb='-'
     else
-        error "No boot path not found" "(base=$PWD)" ; return
+        trace -a -c "Boot loader path" "$sgrb (base=$PWD)"
     fi
 
     local mpnt
     case "$sgrb" in
     -)  ;;
-    */grub|*/efi|*/EFI)
+    */grub|*/efi|*/EFI|*/overlays)
         if [ -h "$sgrb" ] ; then
             error "Boot path must not be a symlink:" "$sgrb" ; return
         fi
         mpnt="${sgrb%/*}" ;;
-    *)  error "Bad boot path (must match '*/grub|efi'):" "$sgrb" ; return
+    *)  error "Bad boot path (must match '*/grub|efi|overlays'):" "$sgrb" ; return
     esac
 
     if [ -z "$mpnt" ] ; then
@@ -501,8 +506,7 @@ do_restore() {
 
     # restore a tar-archive
 
-    folder -r -c -m -f "$CEN_FLG_MOUNT${CEN_FLG_MOUNT:+/}$dest"
-    dest="$PWD"
+    folder -r -c -m -f -s dest "$CEN_FLG_MOUNT/$dest"
     message -a "Restore '$dest' from '${file##*/}' ..."
     system -f tar -xf "$file" --overwrite --recursive-unlink $compr $CEN_TAR_OPTS "$@"
 
@@ -627,7 +631,7 @@ do_sysrest() {
     fi
 
     folder -c -f "$CEN_FLG_MOUNT" ; CEN_FLG_MOUNT="$PWD"
-    local proot="/" phome="/home" puser="/usr"
+    local proot='/' phome="/home" puser="/usr"
     if [ -z "$CEN_FLG_EXTFS" ] ; then
         local vroot="$CEN_DAT_VROOT" vhome="$CEN_DAT_VHOME"
         if matchpath -d -o -s proot "$vroot-$CEN_FLG_DIST" "$vroot" ; then
@@ -692,7 +696,7 @@ do_sysrest() {
 
     # --- unmount ---
 
-    folder -c -f "/"
+    folder -c -f '/'
     if [ -n "$CEN_FLG_PART" -a -n "$CEN_FLG_MOUNT" -a -n "$CEN_FLG_UNMOUNT" ] ; then
        message -a "Unmounting '$CEN_FLG_PART' from '$CEN_FLG_MOUNT' ..."
        system -q umount "$CEN_FLG_PART"
@@ -712,7 +716,7 @@ run() {
         [ -n "$CEN_FLG_BOOT$CEN_FLG_LABEL$CEN_FLG_MKFS" ] &&
             fatal "Invalid option(s) used with --restore --clone"
         local dest="${CEN_FLG_REST:-/}"
-        [ "$dest" -ef "/" ] && dest="/"
+        [ "$dest" -ef '/' ] && dest='/'
         folder -c -f "$dest"
         do_rename
 
@@ -729,7 +733,7 @@ run() {
         fi
         arguments 1 "$marg" "$@" || return
 
-        if [ "${CEN_FLG_REST::5}" = "/dev/" ] ; then
+        if [ "${CEN_FLG_REST::5}" = '/dev/' ] ; then
             do_chk_block "$CEN_FLG_REST" || return
         else
             folder -c "$CEN_FLG_REST" || return
@@ -737,8 +741,8 @@ run() {
         fi
 
         for curr in "$@" ; do
-            folder -f -c "/"
-            [ "${curr::1}" = "/" ] || curr="$base/$curr"
+            folder -f -c '/'
+            [ "${curr::1}" = '/' ] || curr="$base/$curr"
             do_chk_file "$curr" || continue
             do_restore "$CEN_FLG_REST" "$_do_chk_file"
         done
@@ -834,7 +838,7 @@ $CEN_USE_OPTIONS
        -C --clone   <name>  prepare a clone with hostname=<name>. Up to three
                             extra --clone options can follow to override (1)
                             the boot partition (2) the root partion and (3)
-                            to specifiy a path 'grub.cfg'. See example (8)
+                            to specifiy a path to 'grub.cfg'. See example (8)
        -D --dist    <nick>  add distribution name to root/home btrfs-volumes
        -F --format          make btrfs filesystem
        -G --grub            run BIOS grub-install (i386-pc target)

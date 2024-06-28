@@ -5,7 +5,7 @@ CEN_TITLE="Compare package lists, run apt update(install/remove"
 
 # Import the bash library, set name and version
 
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -i -s -y - '0.31:2' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -i -s -t -y - '0.31:2' || exit 2
 
 # Data
 
@@ -17,6 +17,7 @@ CEN_OPT_LIBS=           # see --libs option
 CEN_OPT_NOSYNC=         # see --nosync option
 CEN_OPT_REVERSE=        # see --reverse option
 CEN_OPT_SETSEL=         # see --set option
+CEN_OPT_TOOL=           # see --tool option
 CEN_OPT_DEVEL=          # see --development option
 CEN_OPT_UPDATE=         # see --update
 CEN_OPT_UPGRADE=        # see --upgrade
@@ -39,12 +40,12 @@ process_status() {
     local inst
     local deinst
     case "$3" in
-    hold)       message "ignore package with status 'hold': $2 ($1)"
+    hold)       message $"ignore package with status 'hold': $2 ($1)"
                 return ;;
     install)    inst="$3" ;;
     purge|deinstall)
                 deinst="$3" ;;
-    *)          error "unknown package status '$3': $2 ($1)"
+    *)          error $"unknown package status '$3': $2 ($1)"
                 return ;;
     esac
 
@@ -76,7 +77,7 @@ process_item() {
     case "$kind" in
             # no change - validate only
     '-')    [ "$nam1" = "$nam2" -a "$mod1" = "$mod2" ] ||
-                error "Bad diff data: $*"
+                error $"Bad 'diff' data:" "$*"
             ;;
 
             # added on right or left side
@@ -92,7 +93,7 @@ process_item() {
             ;;
 
             # should never occur - bug
-    *)      fatal "Bad diff mode: $*" ;;
+    *)      fatal $"Bad 'diff' mode:" "$*" ;;
     esac
 }
 
@@ -114,7 +115,7 @@ process_diff() {
             process_item "$nam1" "$mod1" "$kind" "$nam2" "$mod2"
         # invalid line
         else
-            error "Bad diff line: $nam1 $mod1 $kind $nam2 $mod2 $oops"
+            error $"Bad 'diff' line:" "$nam1 $mod1 $kind $nam2 $mod2 $oops"
         fi
     done
 }
@@ -135,6 +136,7 @@ process_apt() {
         if [ -z "$CEN_OPT_SILENT" ] || [ "$CEN_VERB" -gt 1 ] ; then
             system -e -p -z -- "$@" ; return
         fi
+        [ -z "$COLUMNS" ] && system -q -s COLUMNS -- tput cols
         local snam="${CEN_EMBED:-$CEN_NAME}" cols="${COLUMNS:-100}"
         local cols=$((cols - ${#snam} - 2))
 
@@ -185,7 +187,7 @@ process_apt() {
                 *)  ___aptmsg "$poll" "$last" ; last=
                 esac
             done
-            [ "$stat" = 0 ] || error "The 'apt' command failed (status $stat)"
+            [ "$stat" = 0 ] || error -p $"The 'apt' command failed (status %s)" "$stat"
             return "$stat"
         }
 
@@ -256,10 +258,10 @@ process_apt() {
 
     local lpkg lmod lins=() lrem=() lall
     while read -u "$1" lpkg lmod ; do
-        if [ "$lmod" = "install" ] ; then
-            ___aptrun "Install package: %-40s " "$lmod" "$lpkg" && lins+=("$lpkg")
-        elif [ "$lmod" = "deinstall" ] ; then
-            ___aptrun "Remove package: %-40s " "$lmod" "$lpkg" && lrem+=("$lpkg")
+        if [ "$lmod" = 'install' ] ; then
+            ___aptrun $"Install package: %-40s " "$lmod" "$lpkg" && lins+=("$lpkg")
+        elif [ "$lmod" = 'deinstall' ] ; then
+            ___aptrun $"Remove package: %-40s " "$lmod" "$lpkg" && lrem+=("$lpkg")
         fi
     done
     ___aptend                           # apt install|remove
@@ -278,7 +280,7 @@ check_diff() {
         fi
     fi
     prettypath -c -e -f -s CEN_DIFF_ARG -- "$CEN_DIFF_ARG"
-    [ -r "$CEN_DIFF_ARG" ] || fatal "Cannot read: $CEN_DIFF_ARG"
+    [ -r "$CEN_DIFF_ARG" ] || fatal $"Cannot read:" "$CEN_DIFF_ARG"
 }
 
 # ------------------------------------------------------------------------------
@@ -311,6 +313,26 @@ list_filter() {
 # Compare package list: <src-list> <dest-list>|-
 # ------------------------------------------------------------------------------
 run() {
+    # build package list from command line
+    if [ -n "$CEN_OPT_TOOL" ] ; then
+        local tool mode list=()
+        for tool in "$@" ; do
+            [ "$tool" = '-' ] && continue
+            if [ -n "$CEN_OPT_INST" ] ; then
+                system -c -- "$tool" && continue
+                list+=("$tool install") #; CEN_OPT_DEINST=
+            else
+                system -c -- "$tool" || continue
+                list+=("$tool deinstall") #; CEN_OPT_INST=
+            fi
+        done
+        if [ -z "$list" ] ; then
+            trace $"Nothing to do" ; return
+        fi
+        tmpfile -f -s flst 'tool' ; create -f -a -r -v list -- "$flst"
+        set -- "$flst" ; CEN_OPT_APT=1 ; CEN_OPT_INST=1 ; CEN_OPT_DEINST=
+    fi
+
     if [ "$#" = 0 ] && [ "$CEN_OPT_UPDATE" != 0 -o -n "$CEN_OPT_UPGRADE" ] ; then
         process_apt ; return
     fi
@@ -318,7 +340,7 @@ run() {
     check_diff "$2"
     local dest="$CEN_DIFF_ARG"
     check_diff "$1"
-    [ "$CEN_DIFF_ARG" = '-' ] && fatal "1st arg must be <path>, @ or @<host>"
+    [ "$CEN_DIFF_ARG" = '-' ] && fatal $"1st arg must be <path>, @ or @<host>"
     system -f -c diff dpkg apt
 
     # get input data
@@ -352,7 +374,7 @@ run() {
         process_apt "$hinp"
         redirect -v hinp                        # close handle
     elif [ -n "$CEN_OPT_SETSEL" ] ; then
-        quit "Not supported"
+        quit $"Not supported"
         dpkg --set-selections <"$fdif"
     else
         $CEN_PAGER process_diff <"$fdif"
@@ -365,7 +387,7 @@ run() {
 options() {
     case "$CEN_ACTION" in
 
-    "")
+    '')
         if [ -z "$CEN_OPT_INST$CEN_OPT_DEINST" ] ; then
             CEN_OPT_INST=1 ; CEN_OPT_DEINST=1
         fi
@@ -376,7 +398,7 @@ options() {
         fi
         if [ -n "$CEN_OPT_NOSYNC" ] ; then
             sysfind -s DAT_EATMYDATA -q 'eatmydata' ||
-                warning "Option '--nosync' ignored: package 'eatmydata' is not installed"
+                warning $"Option '--nosync' ignored: package 'eatmydata' is not installed"
         fi
         ;;
 
@@ -398,6 +420,8 @@ options() {
         optarg 'nosync'     -      ;;
     -S|--set*)
         optarg 'setsel'     -      ;;
+    -T|--too*)
+        optarg 'tool'       -      ;;
     -U|--upd*)
         optarg 'update'     -   -o ;;
     -X|--dev*)
@@ -411,12 +435,16 @@ options() {
 # ------------------------------------------------------------------------------
 usage() {
     usagecat << !EOF
-usage: $CEN_NAME [options...] src-selection [dest-selection]
+usage: (1) $CEN_NAME [options...] src-selection dest-selection
+       (2) $CEN_NAME [options...] src-selection
+       (3) $CEN_NAME -T [options...] package...
 
-       Compares sets of installed packages. The generated output uses the
-       "dpkg --get-selection" format and can be used as synaptics input.
+       Form (1) compares sets of installed packages. The generated output uses
+       the "dpkg --get-selection" format and can be used as synaptics input.
 
-       Also packages can be installed or removed interactively or as batch.
+       Form (2) can install or remove packages interactively or as batch.
+
+       Form (3) allows simple package install/remove by command line arguments.
 
 $CEN_USE_OPTIONS
 
@@ -431,6 +459,7 @@ $CEN_USE_OPTIONS
        -N --nosync          no sync calls from apt/dpkg (uses 'eatmydata')
        -R --reverse         swap source and destination
        -S --set             pipe output through "dpkg --set-selections"
+       -T --tool            simple install/remove packages
        -U --update  <when>  run "apt update" (0:=ever  1:=always  2:=auto)
 
        If none of -D and -I are given then -D and -I are implied and if none

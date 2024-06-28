@@ -164,11 +164,12 @@ cfg_params() {
         done
         if [ "$file" = '-' ] ; then
             list+=('')
+            create -r -v list -- - || return 1
         else
             list+=('' '# end')
+            create -t -v list -- "$file" || return 1
+            cfg_keyboard -w -
         fi
-        create -t -v list -- "$file" || return 1
-        cfg_keyboard -w -
      fi
      return 0
 }
@@ -227,7 +228,7 @@ BACKSPACE="guess"
 # ------------------------------------------------------------------------------
 cfg_apply() {
     local dest="${1:--}" name="${2:--}" para="$3"
-    local list wrks tmpl dcfg='/etc/default/centaurisoho'
+    local list wrks dcfg='/etc/default/centaurisoho'
 
     if  [ "$dest" = '-' ] ; then
         get_yesno -y "Update configuration of local host" || quit -a -u
@@ -265,30 +266,21 @@ cfg_apply() {
     cfg_params -w "$dcfg"
     cfg_params -p "$dcfg" "$wrks"
 
-# BUG: primary server0
-# BUG: params after dom name change
-# BUG: generic hosts rename
-
-    tmpl="$wrks/templates"
-    if [ ! -d "$tmpl" ] ; then
-        invoke -e "Cannot locate a template folder" ; return 1
-    fi
-    for item in "$tmpl/$name"/*.TEMPLATE "$tmpl/@shared"/* ; do
-        [ -s "$item" ] || continue
-        [ "${item##*/}" = 'a_boot_grub+grub.cfg.TEMPLATE' ] && continue
-        copyFromTemplate "$item" "$dest"
-    done
+    # update installed templates: <wrks> <host> <root>
+    SOHO_DNAME="${SOHI_DOMAIN%.*}"
+    copyAllTemplates "$wrks" "$name" "$dest"
 
     ___wlan_config() {
         [ "${SOHO_NET_WLAN:--}" = '-' ] || set -- "$@" --wlan   "$SOHO_NET_WLAN:$SOHO_NET_WLAN_PW"
         [ "${SOHO_NET_APNT:--}" = '-' ] || set -- "$@" --apoint "$SOHO_NET_APNT:$SOHO_NET_WLAN_PW"
+        folder -f -m 'etc/hostapd'
         embed -v 'centaurinetgen' "$@" --host="$name" nmcon -- wpasup -- hostapd
     }
 
     if [ "$dest" = '/' ] ; then
         embed -v centaurinetcfg setup "$name"
         ___wlan_config
-    else
+    elif [ -s "$dest/etc/default/centaurinetcfg" ] ; then
         item="$PWD" ; folder -c -f -- "$dest"
         embed -v centaurinetcfg --conf="etc/default/centaurinetcfg" --out=. setup "$name"
         ___wlan_config '--out=.'
@@ -415,7 +407,7 @@ get_network() {
                                                 # get allow offset bits ...
     local mask=$(( (1<<(32 - _netparse_bits)) - 1 ))
     ((mask &= ~255)) ; ((mask += _netconv))     # lower 8 bit must be 0
-    message -p "offset mask %x %x %x" "$mask" "$_netconv" "$abin" #
+    trace -c -p 'offset mask' "%x %x %x" "$mask" "$_netconv" "$abin" #
     if [ "$((abin & ~mask))" != 0 ] ; then
         $merr "Network mask or network base ip address are invalid" ; return 1
     fi
@@ -544,7 +536,7 @@ get_setup() {
         "Domain mismatch:" "$SOHO_DOMAIN (setup.conf), $CEN_NET_DOMAIN (netcfg)"
 
     SOHO_DOMAIN="$CEN_NET_DOMAIN"
-    SOHO_DNAME="${CEN_NET_DOMAIN%.*}"
+    SOHO_DNAME="${SOHI_DOMAIN%.*}"
     SOHO_NET_BASE="$CEN_NET_NETWORKS"
     SOHO_SERVER="${CEN_NET_SERVERS[0]}"
     SOHO_SECOND="${CEN_NET_SERVERS[1]}"
@@ -611,13 +603,13 @@ get_value() {
     [ "$_prom" = '-' -o "${_dflt:--}" != '-' ] && _prom="$_dflt"
 
     printf -v _text '%s%%s[%s]' "$4" "$_prom"
-    local _leng="                                                        "
+    local _leng ; printf -v _leng '%60s'
     local _fill=$((${#_leng} - ${#_text}))
     [ "$_fill" -lt 1 ] && _fill=1
     printf -v _text "$_text" "${_leng::_fill}"
 
     while : ; do
-        confirm -a -f -p - "$_text"
+        confirm -a -f -p - -u "$_text"
         [ -z "$CEN_CONFIRM" ] && CEN_CONFIRM="$_dflt"
         # input validation
         case "$1" in
@@ -652,8 +644,6 @@ get_yesno() {
 run_installer() {
     [ -x './installer' ] || quit -e "Install helper not found:" "$PWD/installer"
     local opts=('./installer' "$@") # "$1" "${2:--}" "${3:--}")
-#    echo "cnt ${#opts[@]} $# ${opts[*]}"
-#    [ "${opts[2]}" = '-' -a "${opts[3]}" != '-' ] && opts[2]="$SOHO_DISTRO"
     DAT_SELF="$CEN_NAME"
     dryrun -s "source ${opts[@]}" && return
     trace -a -c "Sourcing" "${opts[@]}"
@@ -669,8 +659,12 @@ actionBackup() {
     local host="${1:--}" ; [ "$host" = '-' ] && host="$HOSTNAME"
     local aboo="${2:--}" aroo="${3:--}"
     [ "$aboo" = '+' ] && aboo="${host}_boot"
-    [ "$aroo" = '+' ] && aroo="${host}_vol0"
     [ "$aroo" = '-' ] && aroo="${host}_root"
+    if [ "$aroo" = '+' ] ; then
+        aroo="${host}_vol0"
+        [ ! -b "/dev/disk/by-label/$aroo" ] &&
+            [ -b "/dev/disk/by-label/${host}_root" ] && aroo="${host}_root"
+    fi
 
     # boot root volumes     # btrfs
     # boot root             # ext4 (raspi)
@@ -692,7 +686,10 @@ actionBackup() {
         mptr="$CEN_MOUNT_DIR" ; auto=1
     fi
 
-    if [ -d "$mptr/mnt/vol0" -a ! -d "$mptr/Volumes/Root" ] ; then
+    if [ "$mptr" -ef '/mnt/vol0/Volumes/Root' ] ; then
+        mptr='/mnt/vol0'
+        warning "Backup of a running system may result in garbage"
+    elif [ -d "$mptr/mnt/vol0" -a ! -d "$mptr/Volumes/Root" ] ; then
         confirm -n "Mount option 'subvol=/' might be missing. Continue" || quit -a -u
     fi
 
@@ -771,21 +768,18 @@ actionBackup() {
 }
 
 # ------------------------------------------------------------------------------
-# Get configuration from templates: [network|query|show|update] <mpnt> <name> <para>
+# update config: network                              # get config from template
+#                query    <dest>|- <name>|- <para>|-  # configuration query menu
+#                show                                 # show config parameters
+#                update                               # update installed templates
 # ------------------------------------------------------------------------------
-#
-#       query
-#       query <dest> <name> <para>
-# network:
-#   Create repository 'centaurinetcfg' from 'setup.conf' and template
-#
 # When used to modify a system that is not booted the root is found by walking
 # up from <workdir>:
 #
 #       centaurosoho  --base=<workdir> config ...
 # ------------------------------------------------------------------------------
 actionConfig() {
-    local ccmd="${1:-network}" # mpnt="${2:--}"
+    local ccmd="${1:-network}"
     if [ $# -lt 2 ] ; then
         get_base -f || return                       # change dir to base folder
     elif [ "${ccmd::3}" = 'que' ] ; then
@@ -814,15 +808,16 @@ actionConfig() {
         cfg_params -w '-' ; return
         ;;
     upd*)
+        if [ "$root" != '/' ] ; then
+            invoke -e "can update local system only" ; return
+        fi
         cfg_params -r || return
         confirm -y "Update system configuration" || quit -a -u
-     message TODO update config
+        uall=1
         ;;
     *)  invoke -e "Argument must be one of: %s" 'network query show update'
         return
     esac
-
-
 
     if [ -z "$SOHO_DOMAIN" ] ; then
         get_setup -c || return                      # load 'setup.conf'
@@ -842,6 +837,8 @@ actionConfig() {
     embed -t -v centaurinetcfg --config="$file" validate cache
     error -t || return
     move "$file" "$repo/$DAT_SOHO_NETCFG"
+
+    [ -n "$uall" ] && copyAllTemplates "$SOHO_WORKSPACE"
 }
 
 # ------------------------------------------------------------------------------
@@ -1069,7 +1066,7 @@ actionNetwork() {
     sho*)   opts=('--pager=yes' 'list') ;;
     upd*)   opts=('cache') ; fupd=1 ;;
     wai*)   waitForNetwork ; return ;;
-    *)      invoke -e "Argument must be one of: cache show wait" ; return
+    *)      invoke -e "Argument must be one of: cache update show wait" ; return
     esac
     get_base -f || return                           # change dir to base folder
     tmpfile -f || return
@@ -1082,7 +1079,7 @@ actionNetwork() {
 
 waitForNetwork() {
     netconfig                                       # may fail, don't care
-    progress -l "Wait for network becoming online"
+    progress -l $"Wait for network becoming online"
     local addr totl ftrp serv="$CEN_NET_SERVERS"
     [ "$HOSTNAME" = "$serv" ] && serv=              # don't wait for myself
 
@@ -1093,7 +1090,7 @@ waitForNetwork() {
         netiface -k "$addr" || continue
         nettool -q -d "$_netiface" isup && break
     done
-    [ "$addr" = '-' ] && warning "Perhaps no network interface is available"
+    [ "$addr" = '-' ] && warning $"Perhaps no network interface is available"
     timer -i -
     while : ; do
         for addr in $serv 8.8.8.8 debian.org - ; do
@@ -1102,17 +1099,30 @@ waitForNetwork() {
         done
         if [ "$addr" = '-' -a -z "$ftrp" ] ; then
             timer -s totl -p -
-            progress -a -l "Waiting for network since $((totl / 1000)) [s]"
+            progress -a -p $"Waiting for network since %s [s]" "$((totl / 1000))"
             timer -w 2
             continue
         fi
+        if [ -s '/etc/apt/apt.conf' ] ; then
+            addr=
+            txtgrep -i - -m -s addr -y 'Acquire::http::Proxy*' </etc/apt/apt.conf
+            if [ -n "$addr" ] ; then
+                addr="${addr#*\"}" ; addr="${addr#http://}" ; addr="${addr%\"*}"
+                progress -l $"Check if apt proxy can be reached (use ^C to stop)"
+                if ! echo 2>/dev/null >"/dev/tcp/${addr/:/\/}" ; then
+                    error $"Cannot connect to apt proxy:" "$addr"
+                    return 2
+                fi
+            fi
+        fi
         context -t '-'
         if [ -n "$ftrp" ] ; then
-            confirm -n "Network check interrupted, continue anyhow" || quit -a -u
+            confirm -n $"Network check interrupted, continue anyhow" || quit -a -u
+            ftrp=
         else
-            message "Network is online"
+            message $"Network is online"
         fi
-        return
+        return 0
     done
 }
 
@@ -1547,6 +1557,7 @@ actionRestore() {
     fi
 
     [ "$name" != "$host" ] && opts+=(-N "$name")
+
     if [ -n "$rasp" ] ; then
         confirm -a -y -f '%-46s' "Install '$name' in 'raspberry' mode" || return
         embed -z -v centauridisk "${opts[@]}" -M -R 512 -P$swap -- "${labl[1]}"
@@ -1559,6 +1570,7 @@ actionRestore() {
     while [ "$fsys" = 'ext4' ] ; do
         system -e -p -r -- partprobe ; sleep 1
         automount -b -- "${name}_root" || break ; auto=1
+        [ -d "$CEN_MOUNT_DIR/boot/grub" ] || break
         [ -x "$CEN_MOUNT_DIR/usr/sbin/udate-grub.distrib" ] && break
 
         message "Replacing 'grub.cfg' with 'grub.minimal'"
@@ -1586,6 +1598,10 @@ actionRestore() {
             automount -b -- "${name}_vol0" || break
             auto=1
         fi
+     #   if [ -z "$para" ] ; then
+     #       para="$CEN_MOUNT_DIR/etc/default/$CEN_NAME"
+     #       [ -s "$para" ] || para=
+     #   fi
         actionConfig query "$CEN_MOUNT_DIR" "$name" "$para"
         break
     done
@@ -1706,6 +1722,27 @@ actionTemplate() {
     copyFromTemplate "$1" "$2"
 }
 
+# update installed templates: <wrks> [<host> [<root>]]
+copyAllTemplates() {
+    local item priv dest host="${2:--$HOSTNAME}" root="$3"
+    local tmpl="$1/templates"
+    if [ ! -d "$tmpl" ] ; then
+        invoke -e $"Cannot locate the 'templates' folder" ; return 1
+    fi
+    for item in "$tmpl/@shared/"*.TEMPLATE ; do
+        priv="${file/@shared/$host}"
+        [ -e "$priv" ] && item="$priv"
+        item="${item%.TEMPLATE}"
+        get_path -u "${item##*/}" dest
+        dest="${dest//%D%/$SOHO_DNAME}"
+
+    # TODO handle prefix a, r, d ...
+        dest="$root${dest:2}"
+        [ -e "$dest" ] || continue
+        copyFromTemplate "$item" "$dest"
+    done
+}
+
 copyFromTemplate() {
     if [ -z "$DAT_GOT_CONF" ] ; then
         get_base -n || return
@@ -1758,13 +1795,13 @@ actionUnpack() {
         fi
         star="$CEN_MATCHPATH"
         if [ ! -s "$star" ] ; then
-            warning -a -c "Cannot unpack- no seed tar:" "$curr"
+            warning -a -c $"Cannot unpack - no seed tar:" "$curr"
             continue
         elif [ -d "$item/dynamic" -o -d "$item/static" ] ; then
-            warning -a -c "Skipping unpack" "$dist - 'dynamic' or 'static' folder already exists"
+            warning -a -c $"Skipping unpack" "$dist -" $"'dynamic' or 'static' folder already exists"
             continue
         fi
-        message -a -c "Run unpack" "$star"
+        message -a -c $"Run unpack" "$star"
         system -f -- tar --directory="$item" -xaf "$star"
     done
 }
@@ -1773,7 +1810,7 @@ actionUnpack() {
 # zerofill and trim free space: -no args-
 # ------------------------------------------------------------------------------
 actionVacuum() {
-    confirm -y "This will remove all cache data and log files" || return
+    confirm -y $"This will remove all cache data and log files" || return
     embed -y centauricleanup --all
     embed -y centaurimedia copy '/dev/zero' "$CEN_NAME-$$.tmp"
     remove "$CEN_NAME-$$.tmp"
@@ -1802,38 +1839,43 @@ actionWorkspace() {
     # workspace folder ...
     if [ "$1" = 'get' ] ; then
         if [ -e "$2" ] ; then
-            confirm -n "Existing workspace, continue anyhow" || return
+            confirm -n $"Existing workspace, continue anyhow" || return
             folder -c -f -- "$2"
         else
             folder -c -m -f -- "$2"
         fi
     elif [ "$1" = 'put' ] ; then
         if [ ! -d "$2" ] ; then
-            invoke -e "Workspace not found" ; return
+            invoke -e $"Workspace not found" ; return
         fi
         folder -c -f -- "$2"
     else
-        invoke -e "1st argument must be 'get' or 'put'" ; return
+        invoke -e $"1st argument must be 'get' or 'put'" ; return
     fi
-    message -a -c "Workspace folder" "$PWD"
+    message -a -c $"Workspace folder" "$PWD"
 
     # repository folder ...
-    local repo
+    local repo dist
     if [ "${3:--}" = '-' ] ; then
         resolve -e -c -s repo -- "$CEN_ROOT/shared/../.." || return
     else
         folder -s repo -- "$CEN_ROOT/configs/$3" || return
     fi
-    message -a -c "Repository" "$repo"
+    message -a -c $"Repository" "$repo"
 
     if [ "$1" = 'get' ] ; then
-        embed -z centauricopy sync "$repo/@soho" . || return
+        embed -z centauricopy sync "$repo/@soho/master" . || return
         run_installer unpack
     else
-        run_installer pack
-        embed -z centauricopy sync -i 'configs/@seed/seed-everything.tgz$' \
-                 -i "configs/${repo##*/}" -x 'configs/[a-z]*' -x 'configs/@cent'  \
-                 -x '^static$' -x '^dynamic$' -x 'configs/@seed/*' . "$repo/@soho"
+        for dist in dists/[a-z]* ; do
+            [ -d "$dist/static" ] || continue
+            run_installer pack "${dist#*/}"
+        done
+        embed -z centauricopy sync -x 'dists/[a-z]*/[a-z]*' -x 'seed-*-*.tgz' \
+                              -x '^seed.tgz' -x '^setup.conf' -x '^configs' \
+                              -x '^dynamic' -x '^packages' -x '^passwords' \
+                              -x '^private' -x '^static' -x '^templates' \
+                              "$repo/@soho/master"
     fi
 }
 
@@ -1841,10 +1883,6 @@ actionWorkspace() {
 # Testing
 # ------------------------------------------------------------------------------
 actionXxx() {
-#    cfg_apply "$@"
-local temp
-get_path "-$1" "$2" temp
-message "$2  ->  $temp"
     return 0
 }
 
@@ -1881,7 +1919,7 @@ actions() {
     dis*)
         invoke -s 'distr'   -             0 2 ;;   # one optional arg
     doc*|help)
-        invoke    'docview' -             0 1 ;;   # one optional arg
+        invoke    'docview' -             0 + ;;   # one optional arg
     dum|dump)
         invoke -s 'dump'    -               0 ;;   # no args
     exp*)
@@ -1959,54 +1997,58 @@ usage() {
 
     usageset \
         -a $"••• setup commands •••" \
-        -a 'configure'            $"update 'setup.conf' from network configuration" \
-        -a 'seed'                 $"step 1: unpack seed tar" \
+        -a 'configure'            $"# update 'setup.conf' from network configuration" \
+        -a 'seed'                 $"# step 1: unpack seed tar" \
         -a '[clone] /dev/<disk> [<name> [<swap>]]' \
-        -a -                      $"step 2: clone to EFI bootable BTRFS disk" \
-        -a 'base'                 $"step 3: install a base system" \
-        -a 'client'               $"...     make this a client machine" \
-        -a 'appliance'            $"...     make this an appliance" \
-        -a 'server'               $"...     make this a server machine"
+        -a -                      $"# step 2: clone to EFI bootable BTRFS disk" \
+        -a 'base'                 $"# step 3: install a base system" \
+        -a 'client'               $"# ...     make this a client machine" \
+        -a 'appliance'            $"# ...     make this an appliance" \
+        -a 'server'               $"# ...     make this a server machine"
 
     local item ; get_cmds
     for item in "${DAT_SOHO_CMDS[@]}" ; do
-        usageset -a "${item%|*}" "${item#*|}"
+        usageset -a "${item%|*}" "# ${item#*|}"
     done
 
     usageset \
         -a - \
+        -a "••• setup tools •••" \
+        -a 'config     [network|show|update]' \
+        -a -                      $"# update configuration from 'setup.conf'" \
+        -a 'config     query [<dest>|- [<name>|- [<para>|-]]]'\
+        -a -                      $"# update configuration using a menu" \
+        -a 'info'                 $"# print some status information" \
+        -a 'network    [cache|show|update|wait]' \
+        -a 'repository [<path> [<dest>|- [<dflt>|-]]]' \
+        -a -                      $"# install a file from repository" \
+        -a 'template   <path> [<file>|-|.]' \
+        -a -                      $"# expand a template to stdout or a file" \
+        -a - \
         -a "••• packaging commands •••" \
-        -a 'config     <carg>'    $"update configuration from 'setup.conf'" \
         -a 'distrib    [[<dist>]°<conf>]' \
-        -a -                      $"generate distributable tar file from workspace" \
-        -a 'expand     [<soho>]'  $"create workspace from distributable tar file" \
-        -a 'info'                 $"print some status information" \
-        -a 'pack'                 $"generate seed tar file from workspace" \
+        -a -                      $"# generate distributable tar file from workspace" \
+        -a 'expand     [<soho>]'  $"# create workspace from distributable tar file" \
+        -a 'pack'                 $"# generate seed tar file from workspace" \
         -a 'unpack     [[<dist>]°<conf>]' \
-        -a -                      $"unpack seed tar file in workspace" \
+        -a -                      $"# unpack seed tar file in workspace" \
         -a 'workspace  archive -|<suff>' \
-        -a -                      $"run 'pack' and create 'centaurisoho-master' tar" \
+        -a -                      $"# run 'pack' and create 'centaurisoho-master' tar" \
         -a 'workspace  get|put <work> [<dist>]' \
-        -a -                      $"syncronize workspace with repository" \
+        -a -                      $"# syncronize workspace with repository" \
 
     usageset \
         -a - \
         -a $"••• other/helpers •••" \
         -a 'backup     <host> <boot>|-|+ [<root>|-|+ [<arch>]]' \
-        -a -                      $"offline backup to create a disk tar" \
-        -a 'docview    [<key>]'   $"documentation viewer" \
+        -a -                      $"# offline backup to create a disk tar" \
+        -a 'docview    [<key>]'   $"# documentation viewer" \
         -a 'message    <mtag> [<file>|- [<pref> [<subs>]]]' \
-        -a -                      $"cat or copy a text from '@misc/messages' file" \
-        -a 'network    [cache|show|update|wait]' \
-        -a -                      $"update config cache or show config" \
+        -a -                      $"# cat or copy a text from '@misc/messages' file" \
         -a 'rename     [<curr>] <name>' \
-        -a -                      $"change the hostname" \
-        -a 'repository [<path> [<dest>|- [<dflt>|-]]]' \
-        -a -                      $"install from repository" \
+        -a -                      $"# change the hostname of a running system" \
         -a 'restore    <dist> <disk> [ext4|btrfs] [<name>] [<swap>] [<para>|-]' \
-        -a -                      $"install an image tar to a block device" \
-        -a 'template   <path> [<file>|-|.]' \
-        -a -                      $"expand a template to stdout or a file" \
+        -a -                      $"# install an image tar to a block device" \
 
     usageset \
         -p '<arch>'               $"backup target: architecture" \
@@ -2037,20 +2079,20 @@ usage() {
         -p '<swap>'               $"swap partition size in <nnn>M or <nn>G notation" \
 
     usageset \
-        -l "Setup" \
-        -t "In step 1 you unpack a distributable tar and run the extracted 'setup':" \
+        -l $"Setup" \
+        -t $"In step 1 you unpack a distributable tar and run the extracted 'setup':" \
         -t - \
         -t "°   tar -xaf centaurisoho-bookworm-worms.tgz" \
         -t "°   centaurisoho-bookworm-worms/setup seed" \
         -t - \
-        -t "This step installs centauri-bash-library and tools. You can continue" \
-        -t "using 'setup' or you can now use the slightly friendlier '$CEN_NAME'."
+        -t $"This step installs centauri-bash-library and tools. You can continue" \
+        -t $"using 'setup' or you can now use the slightly friendlier '$CEN_NAME'."
 
     usageset \
-        -l "Templates" \
-        -t "The 'repository' and 'template' actions use '*.TEMPLATE' files to generate" \
-        -t "configuration files. Template parameters are from 'setup.conf' (setup step" \
-        -t "1 and 2) or later also from '/etc/default/centaurinetcfg'."
+        -l $"Templates" \
+        -t $"The 'repository' and 'template' actions use '*.TEMPLATE' files to generate" \
+        -t $"configuration files. Template parameters are from 'setup.conf' (setup step" \
+        -t $"1 and 2) or later also from '/etc/default/centaurinetcfg'."
 }
 
 # ------------------------------------------------------------------------------

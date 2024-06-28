@@ -250,7 +250,7 @@ do_repository() {
     folder -m "$DAT_ROOT/remote"
     folder -m "$DAT_ROOT/secrets"
 
-    ___repo_setup "shared"  "$DAT_SHARED"
+    ___repo_setup 'shared'  "$DAT_SHARED"
     ___repo_setup 'private' "$DAT_PRIVATE"
 }
 
@@ -320,6 +320,8 @@ do_rights() {
 #
 do_parse() {
     system -c -e cmp || return  # used by compare()
+    local optc opta="$CEN_OPT_ALL"
+    [ "$1" = '-c' ] && { opta=1 ; optc=1 ; shift ; }
     local aind keyw=() keyl keyp line=0 func="$1" ; DAT_FILTER="$2"
     aind="$CEN_AUTOIND" ; CEN_AUTOIND=
     trace -a "Parsing config file: $DAT_CONFIG"
@@ -346,8 +348,8 @@ do_parse() {
             case "$argu" in
 
             # computer role ...
-            client) [ "$DAT_NET_ROLE" != 'WORKSTATION' ] && [ -z "$CEN_OPT_ALL" ] && def_bln=1 ;;
-            server) [ "$DAT_NET_ROLE"  = 'WORKSTATION' ] && [ -z "$CEN_OPT_ALL" ] && def_bln=1 ;;
+            client) [ "$DAT_NET_ROLE" != 'WORKSTATION' ] && [ -z "$opta" ] && def_bln=1 ;;
+            server) [ "$DAT_NET_ROLE"  = 'WORKSTATION' ] && [ -z "$opta" ] && def_bln=1 ;;
 
             dist*|family)
                     [ -n "$def_fam" ] &&
@@ -386,7 +388,7 @@ do_parse() {
                     [ "$argu" = "$argd" ] && DAT_COND_DIST="$argm"
                     def_dis=1 ;;
 
-            /*)     [ -z "$CEN_OPT_ALL" -a ! -e "$argu" ] && def_bln=1 ;;
+            /*)     [ -z "$opta" -a ! -e "$argu" ] && def_bln=1 ;;
 
             @*)     [ "$HOSTNAME" = "${argu:1}" ] || def_bln=1 ;;
 
@@ -417,7 +419,7 @@ do_parse() {
     }
 
     ___folder() {
-        [ ! -d "${keyw[1]}" ] && [ -z "$CEN_OPT_ALL" ] && return
+        [ ! -d "${keyw[1]}" ] && [ -z "$opta" ] && return
         if [ "${DAT_FILTER::1}" = '@' ] ; then
             [ -z "$DAT_COND_CRON" ] && return
             [ "$DAT_FILTER" != '@' -a "$DAT_COND_CRON" != "$DAT_FILTER" ] && return
@@ -427,7 +429,7 @@ do_parse() {
 
     # loop over config file lines
     DAT_COND_BOOL=1
-    while read -r -u4  keyl; do
+    while read -r -u4 keyl; do
         ((line++))
         if [ -n "$keyp" ] ; then
             keyl="$keyp $keyl" ; keyp=
@@ -435,7 +437,7 @@ do_parse() {
 
         # preprocessing, handle skip on DAT_COND_BOOL
         case "$keyl" in
-            "")             continue ;;
+            '')             continue ;;
             *\\)            keyp="${keyl::-1}" ; continue ;;
             \#*)            continue ;;
             condition*)     ;;
@@ -468,12 +470,14 @@ do_parse() {
 
 # ignore missing file if name starts with '-': <path> <item> <fldr>
 do_ignore() {
+    local optc="$CEN_OPT_ALL"
+    [ "$1" = '-c' ] && { optc=1 ; shift ; }
     local -n _vfil="$1" _vitm="$2"
     local _pref ; [ "${3:--}" = '-' ] || _pref="$3/"
     if [ "${_vitm::1}" = '-' ] ; then
         _vitm="${_vitm:1}"
         _vfil="$_pref$_vitm"
-        [ -n "$CEN_OPT_EXTRA" -o -n "$CEN_OPT_ALL" ] && return 1
+        [ -n "$CEN_OPT_EXTRA" -o -n "$optc" ] && return 1
         [ -e "$_vfil" ] || return 0
     else
         _vfil="$_pref$_vitm"
@@ -1027,7 +1031,7 @@ actionCheck() {
 
     ___add_shared() {
         local leng="${#1}"
-        [ "${1:leng-1}" = "~" ] && return
+        [ "${1:leng-1}" = '~' ] && return
         do_nosymlink "$1"
         case "$?" in
             1)  ((nrep += 1)) ;;
@@ -1037,7 +1041,7 @@ actionCheck() {
     }
     ___add_private() {
         local leng="${#1}"
-        [ "${1:leng-1}" = "~" ] && return
+        [ "${1:leng-1}" = '~' ] && return
         do_nosymlink "$1"
         case "$?" in
             1)  ((nrep += 1)) ;;
@@ -1048,7 +1052,7 @@ actionCheck() {
 
     # try to fix problems
     ___repair() {
-        nrep=$((nrep + 1))
+        ((nrep += 1))
         [ "$CEN_ACTION" = "fix" ] || return
         [ "$1" = "nofix" ] && return
         repa[nrep - 1]="$*"
@@ -1057,7 +1061,7 @@ actionCheck() {
     # run repository checks: <pref>
     ___checks() {
         local pkey="$1$path" pref="$1"
-        mpre["$path"]="$1"
+        mpre["$path"]="$pref"
 
         # mark file as used
         if   [ -n "${mpri["$pkey"]}" ] ; then
@@ -1070,7 +1074,7 @@ actionCheck() {
         fi
 
         # shared file cannot be in private
-        if [ "$acmd" = "shared" ] ; then
+        if [ "$acmd" = 'shared' ] ; then
             if   [ -n "${mpri["$pkey"]}" ] ; then
                 ___report "Should be in 'shared' only:" "private/$pkey"
                 ___repair delete 'private' "$pkey"
@@ -1082,14 +1086,19 @@ actionCheck() {
     ___extra() {
         local -n rmap="$2"
         for fkey in "${!rmap[@]}" ; do
-            [ "${rmap["$fkey"]}" = "2" ] && continue
-            [ "$1" = "shared" -a "${mpri["$fkey"]}" = "2" ] && continue
+            [ "${rmap["$fkey"]}" = 2 ] && continue
+            [ "$1" = 'shared' -a "${mpri["$fkey"]}" = 2 ] && continue
 
             local fpre="${fkey::1}" fbas="${fkey:1}"
 
-            # ist es konfiguriert?
+            # found in config?
             if [ -z "${mpre["$fbas"]}" ] ; then
-                [ -z "$CEN_OPT_ALL" -a "$1" = "shared" ] && continue
+                case "$fpre" in
+                    a)  ;;
+                    ${DAT_KEYS[0]}) ;;
+                    ${DAT_KEYS[1]}) ;;
+                    *)  continue                # ignore other dist
+                esac
                 ___report "File not in configuration :" "$1/$fkey"
                 ___repair delete "$1" "$fkey"
                 continue
@@ -1101,7 +1110,7 @@ actionCheck() {
                 done
                 [ "$pref" = '-' ] || continue
                 ___report "Wrong prefix, expected '${mpre["$fbas"]}':" "shared/$fkey"
-                ___repair prefix "${mpre["$fbas"]}" "shared" "$fkey"
+                ___repair prefix "${mpre["$fbas"]}" 'shared' "$fkey"
             fi
             continue
         done
@@ -1129,9 +1138,9 @@ actionCheck() {
         local acmd="$1" ; shift
         local afld="$1" ; shift
         local argu ffil
-        if [ "$acmd" = 'private' -o "$acmd" = "shared" ] ; then
+        if [ "$acmd" = 'private' -o "$acmd" = 'shared' ] ; then
             for argu in "$@" ; do
-                do_ignore ffil argu "$afld" && continue
+                do_ignore -c ffil argu "$afld" && continue
                 ___outdup "$ffil"
                 do_convert -d "$ffil" path
                 ___checks "$DAT_COND_DIST"
@@ -1144,16 +1153,16 @@ actionCheck() {
     walk -b -r -l 1 -f ___add_private -- "$DAT_PRIVATE"
 
     # parse configuration
-    do_parse ___output
-    mpri["PACKAGES"]=2 ; mpri["OPTIONS"]=2
+    do_parse -c ___output
+    mpri['PACKAGES']=2 ; mpri['OPTIONS']=2 ; mpri['OWNERS']=2
 
     # check filesystem against configuration
-    ___extra "shared"  msha
+    ___extra 'shared'  msha
     ___extra 'private' mpri
 
     # sort output and display in groups
     local outc outl repi
-    extsort -i outp -a outp -o "-k2" || return
+    extsort -i outp -a outp -o '-k2' || return
     for outl in "${outp[@]}" ; do
         repi="${outl%% *}" ; repi="${repa[repi]}"
         outl="${outl#* }"
@@ -1164,7 +1173,6 @@ actionCheck() {
             message "$outl"
         fi
 
-#        [ -n "$repi" ] || continue
         local arep repr
         splitjoin -s arep -d " " "$repi"
         case "$arep" in
@@ -1183,7 +1191,7 @@ actionCheck() {
             ;;
         esac
     done
-
+message "dist $DAT_DISTRO"
     if [ "$nrep" = 0 ] ; then
         message -p "No errors found"
     else
@@ -1399,7 +1407,7 @@ options() {
     -R|--rol|--role)
         optarg "role"      -               "pri.*|sec.*|wor.*" ;;
     -S|--sha*)
-        optarg "shared"    -               -d ;;            # folder
+        optarg 'shared'    -               -d ;;            # folder
     -V|--ove*)
         optarg 'override'  -               -o ;;            # ternary
     -X|--pro*)

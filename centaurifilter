@@ -1372,9 +1372,6 @@ actionMode() {
 #
 # /proc/sys/net/ipv4/conf/<if>/forwarding are used as flag to flush NAT.  Thus
 # route can be called to reinitialize NAT without a preceeding call to noroute.
-#
-# TODO: really enable ipv6 forwarding in /etc/sysctld.d ????
-#
 # ------------------------------------------------------------------------------
 actionRoute() {
     # enable/disable forwarding: <value> <iface>
@@ -1392,9 +1389,9 @@ actionRoute() {
             [ -r "$ifce/forwarding" ] || continue
             read fval <$ifce/forwarding
             [ "$fval" = 0 ] && continue
-            ___forwarding "0" "${ifce##*/}"
+            ___forwarding 0 "${ifce##*/}"
             message -a "Forwarding for '${ifce##*/}' now disabled"
-            icnt=$((icnt + 1))
+            ((icnt += 1))
         done
         local plur ; [ "$icnt" = 1 ] || plur="s"
         message -a "Disabled forwarding for $icnt interface$plur."
@@ -1420,7 +1417,7 @@ actionRoute() {
                 read fval <$ifce/forwarding
                 [ "$fval" = 0 ] && continue
                 message -a "Forwarding for '${ifce##*/}' is enabled"
-                icnt=$((icnt + 1))
+                ((icnt += 1))
             done
             local plur ; [ "$icnt" = 1 ] || plur="s"
             message -a "Found $icnt forwarding interface$plur."

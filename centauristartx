@@ -70,7 +70,7 @@ has_display() {
             [ -r "$card/status" ] || continue
             [ "${card/LVDS/}" != "$card" ] && continue   # pokini/notebook
             read xcon <"$card/status"
-            [ "$xcon" = "connected" ] || continue
+            [ "$xcon" = 'connected' ] || continue
             DAT_CARD="$card"
             trace -a -c $"Display connected" "$card"
             return 0
@@ -112,12 +112,15 @@ has_display() {
         fi
         if [ -n "$wras" ] ; then
             wrun=___wait_raspi
-        # on an intel pc ...
-        elif [ -d "/sys/class/drm" ] ; then
-            wrun=___wait_pc
-        # unknown
+        # could be an intel pc ...
         else
-            wrun=___wait_unknown
+            set -- /sys/class/drm/card*
+            if [ -e "$1" ] ; then
+                wrun=___wait_pc
+            # unknown
+            else
+                wrun=___wait_unknown
+            fi
         fi
         while [ "${wmax:-1}" -ge 1 ] ; do
             $wrun && return 0                   # check for display

@@ -243,8 +243,9 @@ server_info() {
 # Make a computer a secure NFS client: [<admn>]
 # ------------------------------------------------------------------------------
 actionClient() {
-    local gssm=('kstart' 'adcli')
-    local opts ; [ -n "$CEN_OPT_FORCE" ] && opts="--force"
+    # tool k5start is in debain package kstart ...
+    local gssm=('k5start' 'adcli') gpak=('kstart' 'adcli')
+    local opts ; [ -n "$CEN_OPT_FORCE" ] && opts='--force'
 
     # -------------------------------- kerberos --------------------------------
     if [ -n "$CEN_OPT_KERBEROS" ] ; then
@@ -253,10 +254,9 @@ actionClient() {
     # ---------------------------------- samba ---------------------------------
     else
         # use mit kerberos, adcli wants it, sasl/sssd need gssapi
-        if ! [ -e "/usr/share/doc/$gssm" -a -e "/usr/share/doc/${gssm[1]}" ] &&
-            confirm -a -q $"Install tools"" (${gssm[*]})" ; then
-                system -c -f apt
-                dryrun "apt install ${gssm[*]}" || apt install "${gssm[@]}"
+        if ! PATH+=':/usr/sbin' system -c -q -- "${gssm[@]}" ; then
+            confirm -a -q $"Install tools"" (${gssm[*]})" &&
+                embed -v -z centauripackage --silent --tool --update=2 --yes "${gpak[@]}"
         fi
 
         if netquery server ; then
@@ -286,10 +286,12 @@ actionClient() {
             warning $"Missing public SSH key of server"
         fi
 
-        if ! system -c samba-tool ; then
-            trace -a -c $"samba-tool not found" $"samba is not installed"
-        elif [ -n "$1" ] ; then
-            actionJoin "$1"
+        if [ -n "$1" ] ; then
+            if system -c samba-tool ; then
+                actionJoin "$1"
+            else
+                warning -c $"samba-tool not found" $"samba is not installed"
+            fi
             embed -v centaurisecrets $opts register -- client ; sleep 2
         elif confirm -n -y $"Register computer" ; then
             embed -v centaurisecrets $opts register -- client ; sleep 2

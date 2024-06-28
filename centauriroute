@@ -69,6 +69,7 @@ DAT_DEFAULT_FILE="$CEN_ROOT/default/centauriswitch"
 
 DAT_IPV6_MODE=
 DAT_IPV6_HOST=
+DAT_IPV6_NOWARN=
 
 DAT_CONFIG_CURR=        # section last read
 DAT_IFMETRIC=           # path of ifmetric
@@ -142,20 +143,19 @@ do_addrchk() {
         _addrchk_host="$host" ;
     fi
     if [ "$ifce" != '-' ] ; then
-        # debug -t on
-        netiface -k -- "$ifce"              # get kernel name
-        ifce="$_netiface"
-        # debug -t off
-        if ! nettool -d "$ifce" exists ; then
+        netiface -k -s _addrchk_ifce -- "$ifce"     # get kernel name
+        if ! nettool -d "$_addrchk_ifce" exists ; then
             invoke -e "Unknown interface:" "$ifce" ; return 1
         fi
-        _addrchk_ifce="$ifce"
     fi
 
     [ "$_addrchk_ipvx" = 4 ] && return 0            # using ipv4 only
     if ! do_ipv6chk ; then
-        [ -z "$now6" -a "$CEN_ACTION" != 'open' ] && invoke -w "ipv6 is not enabled for this host"
-    elif [ "$ifce" != '-' ] && ! nettool -6 -d "$ifce" status ; then
+        if [ -z "$now6" -a "$CEN_ACTION" != 'open' ] ; then
+            [ -z "$DAT_IPV6_NOWARN" ] && invoke -w "ipv6 is not enabled for this host"
+            DAT_IPV6_NOWARN=1
+        fi
+    elif [ "$ifce" != '-' ] && ! nettool -6 -d "$_addrchk_ifce" status ; then
         [ -z "$now6" ] && invoke -w "ipv6 is not enabled for:" "$ifce"
     else
         return 0                                    # ipv6 is ok
@@ -425,15 +425,15 @@ do_config() {
                 shift
             done
         }
-        set -f
-        ___ifce_names $DAT_SWITCH_IFACES ; DAT_SWITCH_IFACES="${list[*]}"
+        set -f ; set -- $DAT_SWITCH_IFACES ; set +f
+        ___ifce_names "$@" ; DAT_SWITCH_IFACES="${list[*]}"
         ___ifce_names "${DAT_OPEN_BRIDGE[@]}" ; DAT_OPEN_BRIDGE=("${list[@]}")
         ___ifce_names "${DAT_OPEN_PROXY[@]}" ; DAT_OPEN_PROXY=("${list[@]}")
-        ___ifce_names "$DAT_OPEN_WLAN" ; DAT_OPEN_WLAN="$list"
+        set -f ; set -- $DAT_SWITCH_WLAN ; set +f
+        ___ifce_names "$@" ; DAT_OPEN_WLAN="$list"
         if [ "$DAT_OPEN_DIAL" = 'wlan' ] ; then
             ___ifce_names "${DAT_OPEN_DIAL[1]}" ; DAT_OPEN_DIAL[1]="$list"
         fi
-        set +f
     fi
 
     do_country                                  # get wlan reg domain
@@ -485,6 +485,18 @@ do_hostapd() {
          pidfile -n "hostapd-$1"
          sysrun -e -p -- 'hostapd' -B -P "$CEN_PIDFILE" "$2"
      fi
+}
+
+# ------------------------------------------------------------------------------
+# do invoke -e for nonexisting ifce: <vnam> <ifce>
+# ------------------------------------------------------------------------------
+do_ifexists() {
+    local ifce="${2:--}"; ifce="${ifce#/dev/}"
+    if nettool -d "$ifce" exists ; then
+        printf -v "$1" '%s' "$ifce" ; return 0
+    fi
+    printf -v "$1"
+    invoke -e "Unknown interface:" "$ifce" ; return 1
 }
 
 # -----------------------------------------------------------------------------
@@ -694,13 +706,15 @@ do_metric() {
 # ------------------------------------------------------------------------------
 do_extender() {
     local mode="$1" iins iout
-    netiface -e -s iins -x "$2" || return 1     # trunk is inside
-    netiface -e -s iout -x "$3" || return 1     # extension is outside
+    do_ifexists iins "$2" || return 1           # trunk is inside
+    do_ifexists iout "$3" || return 1           # extension is outside
 
-    message -a -p "Extender %s (inside) to %s (outside)" "$iins" "$iout"
-    nettool -d "$iins" up
-    do_setmetric 'sysrun' -4 "$iins" 100 2
-    nettool -d "$iout" up
+    if [ "$mode" = 1 ] ; then
+        message -a -p "Extender %s (inside) to %s (outside)" "$iins" "$iout"
+        nettool -d "$iins" up
+        do_setmetric 'sysrun' -4 "$iins" 100 2
+        nettool -d "$iout" up
+    fi
 
     local namp="$CEN_NAME-parp-$iins-$iout" \
           namd="$CEN_NAME-dhcp-$iins-$iout" \
@@ -1117,7 +1131,7 @@ do_open() {
         netoption 'dhcp' || error "Mode 'router' depends on 'option dhcp'"
         if netoption 'ipv6' ; then
             message "Mode 'router' disables ipv6 to allow NAT"
-            nettool -6 off
+            nettool -6 off ; DAT_IPV6_NOWARN=1
         fi
     fi
 
@@ -1148,6 +1162,7 @@ do_open() {
     # set '4addr' mode of wlan client in bridge
     local wdev="${DAT_OPEN_WLAN%% *}" wcfg="${DAT_OPEN_WLAN#* }"
     [ "$wcfg" = "$wdev" ] && wcfg="$CEN_NAME"
+    netiface -k -s wdev -- "$wdev"
 
     # client wlan in bridge must be in '4addr' mode
     if [ "$ibri" = 'none' ] ; then
@@ -1278,7 +1293,7 @@ do_close() {
 
     if [ "$iprx" = 'none' ] ; then
         runservice -e stop 'dnsmasq'
-        sleep 1                                 # wait for services
+        timer -w 1                              # wait for services
     else
         do_extender 0 "${iprx[@]}"
     fi
@@ -1318,7 +1333,7 @@ do_dial() {
     ___run_wvdial() {
         sysrun -e -p touch "${DAT_PID}wvdial"
         message "$(date '+%x %X') - Waiting 10s for modem init"
-        sleep 10
+        timer -w 10
         message "$(date '+%x %X') - Starting 'wvdial $1'"
         wvdial "$1"
         local stat=$?
@@ -1326,7 +1341,7 @@ do_dial() {
         remove -- "${DAT_PID}wvdial"
 
         # cleanup after wvdial died
-        CEN_OPT_SYSLOG=2 ; sleep 3
+        CEN_OPT_SYSLOG=2 ; timer -w 3
         DAT_SWITCH_MODE= ; do_status                    # reload status
         [ -z "$DAT_ROUTE_DIAL" ] && exit 0              # after hangup
         message "Cleaning up - wvdial terminated (status $stat)"
@@ -1344,11 +1359,11 @@ do_dial() {
         [ "$wcnd" = '-' ] && wcnd="[ -e "$1" ]"
         eval $wcnd && wait="$wmax"
         while [ $wait -lt "$wmax" ] ; do
-            message -a "Waiting for $1 (since ${wait}s)"
-            sleep 5 ; eval $wcnd && break
+            message -a -p "Waiting for '%s' (since %ss)" "$1" "$wait"
+            timer -w 5 ; eval $wcnd && break
             ((wait += 5))
         done
-        sleep 1             # extra time to get ready
+        timer -w 1                      # extra time to get ready
     }
 
     ___dial_gsm() {
@@ -1450,7 +1465,7 @@ do_dial() {
     }
 
     # --------------------------------------------------------------------------
-    # check dialup device, get config entry (sets dcfg, ddef and dial variables)
+    # check dialup device, get config entry (sets dcfg, ddev and dial variables)
     # --------------------------------------------------------------------------
     ___dial_device() {
         local _args _defs _wdev
@@ -1468,7 +1483,8 @@ do_dial() {
                 *)      warning "Unsupported dial configuration:" "$dial" ; continue ;;
             esac
             [ -e "$_wdev" ] || continue                 # must have device
-            ddev="${_args[1]:-${_defs[0]}}"             # interface
+                                                        # get kernel interface name
+            netiface -k -s ddev -- "${_args[1]:-${_defs[0]}}"
             dcfg[0]="${_args[2]:-${_defs[1]:--}}"       # config or gateway
             dcfg[1]="${_args[3]:-${_defs[2]:--}}"       # host ip
             dcfg[2]="${_args[4]:-${_defs[3]:--}}"       # mtu
@@ -1505,7 +1521,7 @@ do_dial() {
     ___dev_wait "dialup device" ___dial_device
 
     # lockout dial service and write status before dialing
-    [ "$CEN_ACTION" = "start" ] || do_udev disable
+    [ "$CEN_ACTION" = 'start' ] || do_udev disable
 
     # change cgroup to root to avoid wpa_supplicant etc. to get killed too early
     background -c $$ '/' || CEN_QUIT_WSUB=1
@@ -1538,7 +1554,7 @@ do_dial() {
     esac
 
     # reenable/start dial service, write status
-    [ "$CEN_ACTION" = "start" ] || do_udev enable
+    [ "$CEN_ACTION" = 'start' ] || do_udev enable
     ### TODO missing do_config -w
     return 0
 }
@@ -1552,9 +1568,9 @@ do_hangup() {
     local devb="$DAT_OPEN_BRIDGE"
     local ddev="${DAT_ROUTE_DIAL%% *}"
 
-    if [ "${ddev::3}" = "eth" -o "${ddev::3}" = "usb" ] ; then
+    if [ "${ddev::3}" = 'eth' -o "${ddev::3}" = 'usb' ] ; then
         message "Bring down interface: $ddev"
-        [ "${ddev::3}" = "usb" ] && embed -v centauriswitch dhcp down "$ddev"
+        [ "${ddev::3}" = 'usb' ] && embed -v centauriswitch dhcp down "$ddev"
     else
         if [ -e "${DAT_PID}wvdial" ] ; then
             message "Stopping wvdial"
@@ -1567,10 +1583,11 @@ do_hangup() {
         fi
         remove -- "${DAT_PID}"*
     fi
-    nettool -d "$ddev" down
+
+    netiface -e -k "$ddev" && nettool -d "$_netiface" down
 
     embed -v centaurinetcfg resolv default
-        embed -v centaurifilter --zombie noroute "$ddev" "$devb" -- auto
+    embed -v centaurifilter --zombie noroute "$ddev" "$devb" -- auto
 
     [ "$CEN_ACTION" != 'close' ] && do_status -w    # update status file
     DAT_ROUTE_DIAL= ; do_udev enable
@@ -1795,7 +1812,7 @@ actionMetric() {
     if [ "${metr:--}" = '-' ] ; then
         do_metric metr "$host" "$1" "$_addrchk_ifce"
     fi
-    message "metric for '$1' set to '$metr'"
+    message "Setting metric for '$1' to '$metr'"
 
     [ "$_addrchk_ipvx" != 6 ] && do_setmetric 'sysrun' -4 "$_addrchk_ifce" "$metr"
     if [ "$_addrchk_ipvx" != 4 ] ; then
@@ -1811,10 +1828,79 @@ actionMetric() {
 }
 
 # -----------------------------------------------------------------------------
-#
+# http proxy configuration: stat|auto|none|<host> <port>
+# -----------------------------------------------------------------------------
+#   status              # print status report
+#   check               # check upstream proxy, update config
+#   auto                # check and start/reload local proxy
+#   none                # no upstream proxy
+#   <host> <port>       # set upstream proxy
 # ------------------------------------------------------------------------------
 actionProxy() {
-:
+    netserver                                   # load server status
+    local what='tinyproxy' auto
+    local port="${2:-$CEN_NET_PORT_HTTP}" serv="$CEN_NET_SERVER"
+    [ -z "$serv" ] && serv="$CEN_NET_SERVER_GEN.$CEN_NET_DOMAIN"
+    case "${1:-stat}" in
+    *.*|*:*)
+            netproxy -a -w "$1" -p "$port" ; return ;;
+    +)      netproxy -a -w "$serv" -p "$port" ; return ;;
+    che*)
+            netproxy -t && return
+            netproxy -w + -s - ; error -s 3 ; return ;;
+    aut|auto)
+            netproxy -t && return
+            auto='reload'
+            netproxy -w + -s - ;;
+    non|none)
+            netproxy -w - ; return ;;
+    sta*)   ;;
+    *)      invoke -e $"Invalid argument, use:" "status|auto|check|none|<host>"
+            return
+    esac
+
+    local mesg wpad='/var/www/html/wpad.dat' qual="$HOSTNAME.$CEN_NET_DOMAIN"
+    if echo 2>/dev/null >"/dev/tcp/$qual/$port" ; then
+        mesg=$"Running"" '$qual'"
+    elif ! runservice test "$what" ; then
+        mesg="$what "$"not installed or masked" ; qual="$serv"
+        auto=
+    elif runservice status "$what" ; then
+        mesg="$what "$"is active"
+    else
+        mesg="$what "$"not running" ; qual="$serv"
+        [ -n "$auto" ] && auto='start'
+    fi
+
+    if [ -n "$auto" ] ; then
+        runservice -e -n "$auto" "$what" ; return
+    fi
+    message -c -p $"Local proxy" '%-35s %s' "$mesg" "$port"
+
+    if echo 2>/dev/null >"/dev/tcp/$serv/$port" ; then
+        mesg=$"Running"" '$serv'"
+    else
+        mesg=$"Cannot connect"" '$serv'"
+    fi
+    message -a -c -p $"Upstream proxy" '%-35s %s' "$mesg" "$port"
+
+    if ! echo 2>/dev/null >"/dev/tcp/$qual/80" ; then
+        mesg=$"No web server"" '$qual'"
+    elif [ "$qual" != "$serv" ] && [ ! -r "$wpad" ] ; then
+        mesg=$"No script found"" '$wpad'"
+    else
+        mesg="http://$qual/${wpad##*/}"
+    fi
+    message -a -c $"PAC script url" "$mesg"
+    message -a ; mesg=$"Environment"
+    if [ -z "$http_proxy" ] ; then
+        message -a -c -p "$mesg" $"variables are not set, using configuration file"
+        netproxy ; mesg='...'
+    fi
+    message -a -c -p "$mesg" '%-12s %s' 'http_proxy' "${http_proxy:--not set-}"
+    message -a -c -p '...' '%-12s %s' 'https_proxy' "${https_proxy:--not set-}"
+    printf -v mesg '%-12s %s' 'no_proxy' "${no_proxy:--not set-}"
+    message -a -c -b 31 '...' "$mesg"
 }
 
 # -----------------------------------------------------------------------------
@@ -2042,7 +2128,7 @@ actions() {
     mod*)
         invoke 'mode'   actionInit   0 2 ;;
     pro*)
-        invoke 'proxy'  -            0 1 ;;
+        invoke 'proxy'  -            0 3 ;;
     sma*)
         invoke 'smart'  -            0 2 ;;
     tun*)
@@ -2059,6 +2145,8 @@ usage() {
     usageset \
         -a "addr   add|delete <host>|<addr> <inam> [ipv4|ipv6|+|-" \
         -a -                     "add/remove an address to/from interface" \
+        -a "extender start|stop|status <itnk> <inam>" \
+        -a -                     "bridge local interface to trunk via arp/dhcp proxy" \
         -a "gateway <host>|<addr>|- [<inam>|- [[ipv4|ipv6|-] " \
         -a -                     "set default gateway or delete if <host> is '-'" \
         -a "init   [<mode> [<conf>]]" \
@@ -2068,8 +2156,8 @@ usage() {
         -a -                     "set metric for a route of an interface" \
         -a "mode   [<mode> [<conf>]]" \
         -a -                     "set $DAT_ETC_DIR/network/interfaces mode manually" \
-        -a "extender start|stop|status <itnk> <inam>" \
-        -a -                     "bridge local interface to trunk via arp/dhcp proxy" \
+        -a "proxy  [<serv>|none|status|auto [<port>]]" \
+        -a -                     "set upstream proxy, use 'none' for no upstream" \
         -a "smart  [up|down|drop] [<inam>]" \
         -a -                     "smart interface switch (used by ifup/ifdown)" \
         -a "tunnel [up|down] [<inam>]" \
@@ -2077,7 +2165,7 @@ usage() {
         -a 'wait <time>'         "wait for a fixed time" \
         -a "wait <addr> <port> [<time> [<mesg>]]" \
         -a -                     "wait for a port to become available" \
-        -a - \
+        -a "••• dialup/bridge/switch actions •••" \
         -a "open                 manually open brigde or router" \
         -a "close                stop close brigde/router" \
         -a "dial                 manually dial via gsm or wlan" \
@@ -2106,6 +2194,7 @@ arguments:
        <conf>      The suffix of a $DAT_ETC_DIR/network/interfaces configuration;
                    °   <mode> is used if not specified. Only the <mode>s static,
                    °   switch and router are allowed to set <conf>.
+       <serv>      A DNS name or IP address
        <stat>      Must be one of: on|off|auto|status
        <time>      wait time (floating point) in [s]
 

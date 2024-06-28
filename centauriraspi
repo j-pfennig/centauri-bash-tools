@@ -297,6 +297,13 @@ actionEntry() {
         args+=('fsck.repair=yes')
     fi
 
+    # other methods are not reliable on raspberry pi os ...
+    if netoption 'sysdnames' "$CEN_OPT_HOST" ; then
+        args+=('net.ifnames=1')
+    else
+        args+=('net.ifnames=0')
+    fi
+
     case "${1:-splash}" in
     -)          ;;
     splash)     args+=(quiet splash plymouth.ignore-serial-consoles systemd.show_status=1
@@ -309,26 +316,36 @@ actionEntry() {
 
     # add default arguments
 
-    [ $# = 0 ] && case "$name" in
+    local adef=() item
+    case "$name" in
     default|workstation)
-        args+=(centauriswitch=smart systemd.unit=graphical.target) ;;
+        adef=(centauriswitch=smart systemd.unit=graphical.target) ;;
     minimal)
-        args+=(systemd.unit=runlevel2.target) ;;
+        adef=(systemd.unit=runlevel2.target) ;;
     server)
-        args+=(centauriswitch=static systemd.unit=graphical.target) ;;
+        adef=(centauriswitch=static systemd.unit=graphical.target) ;;
     apoint)                                             # wlan does no wds
-        args+=(centauriswitch=static:apoint systemd.unit=graphical.target) ;;
+        adef=(centauriswitch=static:apoint systemd.unit=graphical.target) ;;
     router)
-        args+=(centauriswitch=router systemd.unit=runlevel3.target) ;;
+        adef=(centauriswitch=router systemd.unit=runlevel3.target) ;;
     repeater)
-        args+=(centauriswitch=router:repeater systemd.unit=runlevel3.target) ;;
+        adef=(centauriswitch=router:repeater systemd.unit=runlevel2.target) ;;
     switch)
-        args+=(centauriswitch=switch systemd.unit=runlevel3.target) ;;
+        adef=(centauriswitch=switch systemd.unit=runlevel3.target) ;;
     extender)                                           # wlan does no wds
-        args+=(centauriswitch=switch:extender systemd.unit=runlevel3.target) ;;
-    bootmenu)
-        args+=(centauriswitch=disabled systemd.unit=runlevel3.target centaurilogin=local) ;;
+        adef=(centauriswitch=switch:extender systemd.unit=runlevel2.target) ;;
+    *menu|boot*)
+        adef=(centauriswitch=disabled systemd.unit=runlevel2.target centaurilogin=local) ;;
+    kiosk)
+        adef=(centauriswitch=simple systemd.unit=runlevel3.target centaurilogin=kiosk) ;;
     esac
+
+    for item in "${adef[@]}" ; do
+        listsearch -g -- "${item%%=*}=*" "$@" && continue
+        args+=("$item")
+    done
+
+    # build cmdline.txt
 
     do_name name "$name"                                # simplify entry name
     args+=("$@") ; line="${args[*]}"
@@ -596,13 +613,15 @@ usage() {
        -t $"Some configuration names (see 'entry ...') have special defaults:" \
        -t - \
        -t '- '          $"generate all configurable entries" \
+       -t 'apoint'      $"boot into server mode with WLAN-AP" \
        -t 'bootmenu'    $"show a mode/configuration menu after boot" \
-       -t 'minimal'     $"don't start network, maintenance mode" \
        -t 'extender'    $"connect to WLAN, run arp-proxy and dns-relay" \
+       -t 'minimal'     $"don't start network, maintenance mode" \
        -t 'router'      $"run as a router with NAT and DHCP" \
        -t 'repeater'    $"connect to WLAN, do NAT and DHCP via ethernet" \
-       -t 'server'      $"boot into server mode (always with WLAN-AP)" \
-       -t 'workstation' $"boot into workstation mode" \
+       -t 'server'      $"boot into server mode (WLAN in client mode)" \
+       -t 'switch'      $"brigde interfaces (WLAN needs WDS, see extender)" \
+       -t 'workstation' $"boot into workstation mode (also 'default' mode)" \
 
     usageset -l $"examples" \
        -t "$CEN_NAME --device raspi1 default        # set default config" \

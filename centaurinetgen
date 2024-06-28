@@ -4,7 +4,7 @@ CEN_LEGAL="Dr. J. Pfennig (c) 2023-2024; BSD License"
 CEN_TITLE=$"Generate interface, wlan, dhcp and dnsmasq configurations"
 
 # Import the bash library
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f - '0.10:2' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f - '0.12:3' || exit 2
 
 # Data
 CEN_OPT_APOINT=                 # see --host
@@ -658,7 +658,7 @@ ${hoga}   netmask $mask
         netoption 'sysdnames' "$CEN_OPT_HOST"
         case "$?-$CEN_NET_IFNAMES" in
         0-0)    warning -a "Option 'sysdnames' is set but systemd ifce naming disabled" ;;
-        ?-1)    warning -a "Option 'sysdnames' not set but systemd ifce naming enabled" ;;
+        1-1)    warning -a "Option 'sysdnames' not set but systemd ifce naming enabled" ;;
         esac
 
         # avoid file to be created twice
@@ -1054,6 +1054,11 @@ actionDnsmasq() {
 
 # ------------------------------------------------------------------------------
 # create hostapd configuration: [<ssid>|- [<psk>|-]] <opt=val>...
+#
+# Special <opt>s:   hw_mode=a           # select 5GHz mode
+#                   channel=<N>         # select 5GHz mode for N >= 32
+#
+# See:  https://en.wikipedia.org/wiki/List_of_WLAN_channels
 # ------------------------------------------------------------------------------
 actionHostapd() {
     if [ ! -d "$DAT_ETCDIR/hostapd" ] ; then
@@ -1063,7 +1068,7 @@ actionHostapd() {
     netconfig -f                                    # load config or die
 
     # /etc/hostapd.conf  ==>  /etc/hostapd/<name>.conf
-    local file ssid='-' spsk='-' data sopt link cntr
+    local file ssid='-' spsk='-' link cntr
 
     # get ssid and psk
     if [ "${1/=/}" = "${1:--}" ] ; then
@@ -1094,24 +1099,33 @@ actionHostapd() {
 
     # build array with defaults
     local ifw0 ; netiface -s ifw0 -k 'wlan0'
-    local data=(
+    local mod5=0 sopt indx data=(
+        "ssid=$ssid"
         "interface=$ifw0"
         '#for interfaces monitored by centauriswitch no country code should be set...'
         "$cntr"
         'driver=nl80211'
-        'hw_mode=g'
-        'channel=4'
-        '#ht_capab=[HT40+]'
-        '#require_ht=1'
-        '#ieee80211n=1'
-        '#bridge=br0'
+        ''
+        '#for interfaces monitored by centauriswitch no country code should be set...'
+        '#country_code=DE'
+        '#obsolete: restrict modes by country (now in firmware)'
+        '#ieee80211d=1'
+        ''
         'auth_algs=1'
         'wpa=2'
-        "ssid=$ssid"
-        '#wpa_pairwise=CCMP'
         'wpa_key_mgmt=WPA-PSK'
+        '#TKIP is considered as unsafe'
+        '#wpa_pairwise=TKIP'
+        'rsn_pairwise=CCMP'
         '#wpa_passphrase=<passwd>'
         "wpa_psk=$spsk"
+        ''
+        '#quality of service'
+        'wmm_enabled=1'
+        '# mode g:=2.4GHz  a:=5GHz'
+        'hw_mode=g'
+        'channel=4'
+        'ieee80211n=1'
     )
 
     for sopt in "$@" ; do
@@ -1119,7 +1133,13 @@ actionHostapd() {
             invoke -e "<key>=<val> pair expected:" "$sopt"
             return
         fi
-        local skey="${sopt%%=*}" sval="${sopt#*=}" indx
+        local skey="${sopt%%=*}" sval="${sopt#*=}"
+        case "$skey" in
+        hw_mode) [ "$sval" = 'a'  ] && ((mod5 |= 1)) ;;
+        channel) number -e -u -s sval -- "$sval" || return
+                 [ "$sval" -ge 32 ] && ((mod5 |= 2)) ;;
+        esac
+
         if listsearch -c -g -t -i data -n indx -- "$skey=*" ; then
             data[indx]="${data[indx]%%=*}=$sval"
         elif listsearch -c -g -t -i data -n indx -- "#$skey=*" ; then
@@ -1127,7 +1147,23 @@ actionHostapd() {
             data[indx]="${skey:1}=$sval"
         fi
     done
-    message -a -c "hostapd writing" "$file"
+
+    # fix things for 5GHz mode
+    if [ "$mod5" != 0 ] ; then
+        if [ "$mod5" = 1 ] ; then           # got 'hw_mode=a', set channel
+            listsearch -c -g -t -i data -n indx -- "channel=*" &&
+                data[indx]='channel=36'
+        elif  [ "$mod5" = 2 ] ; then        # get 'channel=xx', set hw_mode
+            listsearch -c -g -t -i data -n indx -- "hw_mode=*" &&
+                data[indx]='hw_mode=a'
+        fi
+        data+=( '#added for 5GHz mode' 'ieee80211ac=1')
+        mod5='5'
+    else
+        mod5='2.4'
+    fi
+
+    message -a -c "hostapd writing" "$file ($mod5 GHz)"
     netfile -v data -- "$file" 600
     link="${file%/*}/hostapd.conf"
     if [ -h "$link" ] || [ ! -e "$link" ] ; then
@@ -1237,20 +1273,30 @@ actionNaming() {
 
     if [ -n "$freq" ] ; then
         if [ "$fcur" = 'bios' ] &&
-        [ ! "$DAT_ETCDIR/systemd/network/99-default.link" -ef '/dev/null' ] ; then
-            # bios mode forced by kernek parameter
+           [ ! "$DAT_ETCDIR/systemd/network/99-default.link" -ef '/dev/null' ] ; then
+            # bios mode forced by kernel parameter
             freq='bios' ; fcur='net.ifnames=0'
         fi
         if [ "$freq" != "$fcur" ] ; then
             if [ "$freq" = 'bios' ] ; then
                 symlink -n '/dev/null' "$DAT_ETCDIR/systemd/network/99-default.link"
-                symlink -n '/dev/null' "$DAT_ETCDIR/systemd/network/73-usb-net-by-mac.link"
             else
                 remove -- "$DAT_ETCDIR/systemd/network/99-default.link" \
-                        "$DAT_ETCDIR/systemd/network/73-usb-net-by-mac.link"
+                          "$DAT_ETCDIR/systemd/network/99-raspi-end0.link"
             fi
             CEN_NET_IFNAMES= ; ___get_naming
         fi
+
+#        if [ -r '/boot/firmware/cmdline.txt' ] ; then
+#            create -c -- "$DAT_ETCDIR/systemd/network/99-raspi-end0.link" <<!EOF
+## on a raspberry pi prevent renaming of 'eth0' to 'end0' ...
+#
+#[Match]
+#    OriginalName=eth*
+#
+## no [Link] to preserve name
+#!EOF
+#       fi
     fi
 
     message    "Configured interface naming:" "$fcfg"
@@ -1373,7 +1419,7 @@ actionWpa() {
     [ "$ssid" = '-' ] && ssid="${DAT_WLAN_SSID:--}"
     [ "$spsk" = '-' ] && spsk="${DAT_WLAN_PASW:--}"
 
-    # get wpa file and return if existing
+    # get wpa file (always lower-case) and return if existing
     do_wpa_check -g file "${ssid,,}"
     if [ "$spsk" = '-' -a -z "$CEN_OPT_FORCE" ] && [ -e "$file" ] ; then
         message -c "WPA file" "keep current:" "$file"

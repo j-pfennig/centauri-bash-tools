@@ -147,22 +147,22 @@ do_partition() {
 # Boot partion: <boot> <root>
 # ------------------------------------------------------------------------------
 do_boot() {
-    if [ "${DAT_ARCH_BOOT:--}" != "-" ] ; then
+    if [ "${DAT_ARCH_BOOT:--}" != '-' ] ; then
         message -a "Restoring boot data ..."
         local opts=()
         optmake -a opts -n 'boot' -v "$1"
         if [ "$CEN_OPT_NAME" != "$DAT_SYS_NAME" ] ; then
             optmake -a opts -n 'clone' -v "$CEN_OPT_NAME"
         fi
-        embed -z -y  centaurirestore "${opts[@]}" "$DAT_ARCH_BOOT"
+        embed -z -y -v centaurirestore "${opts[@]}" "$DAT_ARCH_BOOT"
         error -t || return
     fi
 
     if [ -z "$DAT_NO_BOOT" ] ; then
         message -a "Installing BIOS grub ..."
         local item targ snam gdes="$1" pref
-        [ "$CEN_OPT_FSOPT" = "btrfs" ] && pref="/Volumes/Root"
-        [ "$mode" = "BIOS" ] && gdes="$1$pref/boot"
+        [ "$CEN_OPT_FSOPT" = 'btrfs' ] && pref='/Volumes/Root'
+        [ "$mode" = 'BIOS' ] && gdes="$1$pref/boot"
         folder -r -m "$gdes"
 
         if [ -n "$CEN_OPT_BIOS" ] ; then
@@ -175,7 +175,7 @@ do_boot() {
             grub-install --target=i386-pc --boot-directory="$gdes" "$CEN_OPT_DEVICE"
         error -t || return
         [ -f "$gdes/grub/grub.cfg" -o -n "$CEN_OPT_DRYRUN" ] ||
-            warning -a "Missing grub config: $gdes/grub/grub.cfg"
+            warning -a "Missing grub config:" "$gdes/grub/grub.cfg"
     fi
 
     if [ -n "$CEN_OPT_FILE" ] ; then
@@ -185,9 +185,9 @@ do_boot() {
             warning -a "Cannot create swapfile on BTRFS volume"
         else
             trace -a "Creating swap file..."
-            snam="swapfile" ; [ "$1" = "$2" ] && snam=".swapfile"
+            snam='swapfile' ; [ "$1" = "$2" ] && snam='.swapfile'
             targ="/mnt/boot/$snam"
-            embed -y  centauriswap --base="$2" --target="$targ" \
+            embed -y centauriswap --base="$2" --target="$targ" \
                                legacy "$1/$snam" "$CEN_OPT_FILE"
         fi
     elif [ -n "$CEN_OPT_PART" ] ; then
@@ -208,14 +208,14 @@ do_boot() {
 do_install() {
     local lopt="-l" fvol fboo mode="$1" ; shift
     local labl="${DAT_PREFIX_DISK:-$CEN_OPT_NAME}_vol0"
-    folder -r -f -m -t "${CEN_NAME}_$$_boot" ; fboo="$CEN_FOLDER"
-    folder -r -f -m -t "${CEN_NAME}_$$_vol0" ; fvol="$CEN_FOLDER"
+    folder -r -f -m -s fboo -t "${CEN_NAME}_$$_boot"
+    folder -r -f -m -s fvol -t "${CEN_NAME}_$$_vol0"
     DAT_MOUNT_BOOT="$fboo" ; DAT_MOUNT_VOL0="$fvol"
     local froo="$fvol"
 
     if error -t ; then
         system -q wipefs --all "$DAT_PART_VOL0"
-        if [ "$CEN_OPT_FSOPT" = "btrfs" ] ; then
+        if [ "$CEN_OPT_FSOPT" = 'btrfs' ] ; then
             message -a "Initializing BTRFS partition..."
             [ "$DAT_NO_BOOT" = 1 ] && labl="${labl/_vol0/_vol1}"
             local sopt=("-xVBox" "-xBackup" "-xArchive" "-xSnapshots")
@@ -241,7 +241,7 @@ do_install() {
             optmake -a opts -n 'clone' -v "${DAT_CLONE_BOOT:-+}"
             optmake -a opts -n 'clone' -v "${DAT_CLONE_DISK:-+}"
         fi
-        embed -z -y centaurirestore "${opts[@]}" "$@"
+        embed -z -y -v centaurirestore "${opts[@]}" "$@"
     fi
 
     if error -t ; then
@@ -295,12 +295,12 @@ run() {
     blkdevice -d -e -- "$CEN_OPT_DEVICE" || return
     CEN_OPT_DEVICE="$CEN_BLKDEVICE"
 
-    [ -z "$CEN_OPT_FSOPT" ] && CEN_OPT_FSOPT="btrfs"
+    [ -z "$CEN_OPT_FSOPT" ] && CEN_OPT_FSOPT='btrfs'
 
     # check backup files, get name
     for bfil in "$@" ; do
         args+=("$bfil")
-        [ "${bfil:--}" = "-" -o "$bfil" = "+" ] && continue
+        [ "${bfil:--}" = '-' -o "$bfil" = "+" ] && continue
         [ -r "$bfil" ] || error "Cannot read: $bfil"
         if [ -z "$DAT_SYS_NAME" ] ; then
             bdir="${bfil%/*}" ; [ "$bdir" = "$bfil" ] && bdir="."
@@ -310,19 +310,19 @@ run() {
         fi
     done
 
-    if [ "$1$2$3" = "-" ] ; then
+    if [ "$1$2$3" = '-' ] ; then
         message -a "Creating a non-bootable data volume"
         DAT_NO_BOOT=1
-        [ -z "$CEN_OPT_VOLUME" ] && CEN_OPT_VOLUME="-"
+        [ -z "$CEN_OPT_VOLUME" ] && CEN_OPT_VOLUME='-'
     else
         [ "${1:--}${2:--}${3:--}" = "---" ] && warning -a "No system restore data"
 
         [ -n "$4" -a "$4" != "+" ] && DAT_ARCH_BOOT="$4"
-        [ "$4" = "-" ] && DAT_ARCH_BOOT=
+        [ "$4" = '-' ] && DAT_ARCH_BOOT=
         if [ -z "$DAT_ARCH_BOOT" ] ; then
             [ -z "$CEN_OPT_BIOS" ] && warning -a "No EFI restore data"
             [ -n "$CEN_OPT_RASPI" ] && warning -a "No RASPBERRY boot data"
-        elif [ "${4:--}" != "-" ] ; then
+        elif [ "${4:--}" != '-' ] ; then
             [ -n "$CEN_OPT_BIOS" ] && error "EFI restore data with '--bios'"
         else
             [ -n "$CEN_OPT_BIOS" -a -z "$CEN_OPT_RASPI" ] && DAT_ARCH_BOOT=
@@ -354,7 +354,7 @@ run() {
     # make partitions and call installer
     local styp="EFI" spar="GPT"
     [ -n "$CEN_OPT_MSDOS" ] && spar="MSDOS"
-    [ -n "$CEN_OPT_BIOS"  ] && styp="BIOS"
+    [ -n "$CEN_OPT_BIOS"  ] && styp='BIOS'
     [ -n "$DAT_NO_BOOT"   ] && styp=
     [ -n "$CEN_OPT_RASPI" ] && styp="RASPBERRY"
 

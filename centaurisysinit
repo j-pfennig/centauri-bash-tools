@@ -1,10 +1,10 @@
 #!/bin/bash
 # ------------------------------------------------------------------------------
-CEN_LEGAL="Dr. Jürgen Pfennig (c) 2021-2024; BSD License"
-CEN_TITLE="Centauri initialization helper and launcher for appliances"
+CEN_LEGAL="Dr. Jürgen Pfennig (c) 2021-2024; "$"BSD License"
+CEN_TITLE=$"Centauri initialization and launcher for appliances"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -v -y - '0.04:2' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -t -v -y - '0.10:2' || exit 2
 
 CEN_SVC_WANTED_BY='sysinit.target'
 
@@ -59,7 +59,7 @@ get_appliances() {
     DAT_APPL_ARGS=() ; DAT_APPL_AUTO=()
     configfile -r ___appl_reader || return 1
     [ -n "$DAT_APPL_LABEL" ] && return 0
-    invoke -w "Found no 'appliance' definitions" ; return 1
+    invoke -w $"Found no 'appliance' definitions" ; return 1
 }
 
 # set boot default to an appliance: <appl>
@@ -75,25 +75,30 @@ cfg_appliances() {
             ;;
     [1-9])  indx="$(($1 - 1))"
             if [ -z "${DAT_APPL_LABEL[indx]}" ] ; then
-                invoke -e "Invalid appliance index:" "$1" ; return
+                invoke -e $"Invalid appliance index:" "$1" ; return
             fi
             ;;
-    *)      if ! listsearch -g -n indx -u -i DAT_APPL_LABEL -- "*$1*" ; then
-                invoke -e "Appliance not found" ; return
+    *)      if ! listsearch -n indx -u -i DAT_APPL_LABEL -- "*$1*" ; then
+                invoke -e $"Appliance not found" ; return
             fi
     esac
 
+    local name="${DAT_APPL_LABEL[indx]}" swit args=()
     case "$CEN_ACTION" in
-    enable)     acmd='create' ; frmt="Add appliance '%s' to boot menu" ;;
-    disable)    acmd='delete' ; frmt="Remove appliance '%s' from boot menu" ;;
-    *)          acmd='default' ; frmt="Boot as appliance '%s'" ;;
+    enable)     acmd='create' ; frmt=$"Add appliance '%s' to boot menu" ;;
+    disable)    acmd='delete' ; frmt=$"Remove appliance '%s' from boot menu" ;;
+    *)          acmd='default' ; frmt=$"Boot as appliance '%s'" ;;
     esac
-    confirm -a -y -f "$frmt" "${DAT_APPL_LABEL[indx]}" || return
+    confirm -a -y -f "$frmt" "$name" || return
 
-   ### listsearch must be uniq does not work
+    if [ "$acmd" != 'delete' ] ; then
+        local opti="${DAT_APPL_CONF[indx]}"
+        netoption "$opti" "$HOSTNAME" ||
+            warning -p "Appliance '%s' is not in network config, no automatic setup" "$name"
+    fi
 
-    local name swit args=()
     if [ "$acmd" = 'create' ] ; then
+        remove -- "$CEN_ROOT/persistent/centauriswitch-override"
         [ -n "${DAT_APPL_MODE[indx]#-}" ] && swit="${DAT_APPL_MODE[indx]}"
         [ -n "${DAT_APPL_CONF[indx]#-}" ] && swit="${swit:-smart}:${DAT_APPL_CONF[indx]}"
         [ -n "$swit" ] && args+=("centauriswitch=$swit") #|| args+=('-')
@@ -106,8 +111,7 @@ cfg_appliances() {
     if [ -d '/boot/efi/loader' ] ; then
         acmd="4$((indx + 1))"
         case "$CEN_ACTION" in
-            enable)      name="${DAT_APPL_LABEL[indx]}"
-                         embed -v centauriefilinux -y menu --- "$acmd" create "$name" "${args[@]}" ;;
+            enable)      embed -v centauriefilinux -y menu --- "$acmd" create "$name" "${args[@]}" ;;
             disable)     embed -v centauriefilinux -y menu --- "$acmd" delete ;;
             *)           embed -v centauriefilinux -y menu --- "$acmd" default
         esac
@@ -121,7 +125,7 @@ cfg_appliances() {
             swit='nosplash'
         fi
         if [ "${DAT_APPL_AUTO[indx]}" = "$DAT_APPL_HASS" ] ; then
-            [ "${name:--}" = '-' ] && name="hass" || name="hass-${name::3}"
+            [ "${name:--}" = '-' ] && name='hass' || name="hass-${name::3}"
             acmd='minimal'
         else
             [ "${name:--}" = '-' ] && name="${DAT_APPL_MODE[indx]}"
@@ -133,7 +137,7 @@ cfg_appliances() {
             *)           embed -v centauriraspi -y config --- "$name" "$acmd" ;;
         esac
     else
-        invoke -e "No supported boot method implemented"
+        invoke -e $"No supported boot method implemented"
     fi
 }
 
@@ -169,7 +173,7 @@ run_appliances() {
         switch:*)   ;;
         *)          netw=                       # no network services
     esac
-    message -a -c "Appliance mode" "${netw:-$auto}"
+    message -a -c $"Appliance mode" "${netw:-$auto}"
 
     if [ -z "$netw" ] ; then
         :
@@ -180,10 +184,10 @@ run_appliances() {
 
     # centaurilogin action ...
     if [ "$auto" = "$DAT_APPL_HASS" ] ; then
-        message -a "Starting centaurihass service"
+        message -a -c $"Start service" 'centaurihass'
         system -e -p -- systemctl --no-block start centaurihass
     elif [ -n "$auto" ] ; then
-        message -a -c "Autologin user" "$auto"
+        message -a -c $"Autologin user" "$auto"
         system -e -p -- systemctl --no-block start centauriautologin@"$auto"
     fi
 
@@ -195,16 +199,19 @@ run_appliances() {
 # called at service start
 # ------------------------------------------------------------------------------
 run() {
-    # resolve the config folder path (/etc/default for debian)
-    prettypath -c -- "$CEN_ROOT/default/$CEN_NAME"
+    if [ "${CEN_PATHS[6]}/centaurinetcfg" -nt "$CEN_ROOT/persistent/centaurinetcfg" ] ; then
+        message $"Updating network configuration cache"
+        embed centaurinetcfg setup
+    fi
 
-    # source the config file
-    if [ -e "$CEN_PRETTYPATH" ] ; then
-        message "Running: $CEN_PRETTYPATH"
-        . "$CEN_PRETTYPATH"
+    # get script path and source it
+    local scrp="${CEN_PATHS[6]}/$CEN_NAME"
+    if [ -e "$scrp" ] ; then
+        message -c $"Running script" "$scrp"
+        . "$scrp"
         run_appliances
     else
-        warning "Missing: $CEN_PRETTYPATH"
+        warning -c $"Missing script" "$scrp"
     fi
 }
 
@@ -212,34 +219,31 @@ run() {
 # action config: [<appl>]
 # ------------------------------------------------------------------------------
 actionConfig() {
-    local indx=0 icfg frst=1 wrds="quit" opti optw
+    local indx=0 icfg frst=1 wrds=$"quit" opti optw
+
+    if [ "${CEN_PATHS[6]}/centaurinetcfg" -nt "$CEN_ROOT/persistent/centaurinetcfg" ] ; then
+        message $"Running full network setup"
+        embed centaurinetcfg setup -
+    fi
+
     get_appliances || return
 
     if [ $# -gt 0 ] ; then
         cfg_appliances "$1" ; return
     fi
 
-    message -m "Configured appliances are:" ''
+    message -m $"Configured appliances are:" ''
     if [ "$CEN_ACTION" = 'default' ] ; then
-        message -i "0:" "Default boot mode"
+        message -i '0:' $"Default boot mode"
         wrds+=' 0' ; frst=0
     fi
-    while [ -n "${DAT_APPL_LABEL[indx]}" ] ; do
-        if [ -n "${DAT_APPL_AUTO[indx]}" ] ; then
-            case "${DAT_APPL_MODE[indx]}" in
-            router|switch)
-                opti="${DAT_APPL_MODE[indx]}" ;;
-            *)
-                opti='-'
-            esac
-        else
-            opti="${DAT_APPL_CONF[indx]}"
-            [ -z "$opti" ] && opti="${DAT_APPL_MODE[indx]}"
-        fi
 
+    while [ -n "${DAT_APPL_LABEL[indx]}" ] ; do
+        opti="${DAT_APPL_CONF[indx]}"
+        [ -z "$opti" ] && opti="${DAT_APPL_MODE[indx]}"
         if [ "$opti" = '-' ] ; then
             opti=
-        elif netoption "$opti" ; then
+        elif netoption "$opti" "$HOSTNAME" ; then
             opti=
         else
             opti=' [*]' ; optw=1
@@ -249,13 +253,13 @@ actionConfig() {
     done
     message -i ' '
     if [ -n "$optw" ] ; then
-        message -i -m "[*] This appliance is not enabled by network configuration. Please" \
-                      "    adjust the appropriate 'option <what> <host>...' statement in" \
-                      "    file '/etc/default/centaurinetcfg' to enable it." ''
+        message -i -m $"[*] This appliance is not enabled by network configuration. Please" \
+                      $"    adjust the appropriate 'option <what> <host>...' statement in" \
+                      $"    file '/etc/default/centaurinetcfg' to enable it." ''
     fi
     [ "$CEN_ACTION" = 'list' ] && return
     while ! confirm -p - -s icfg -v "$wrds" \
-            "Select an Appliance or hit <return> when finished [$frst..$indx]" ; do
+            $"Select an Appliance or hit <return> when finished"" [$frst..$indx]" ; do
         if [ "$CEN_ACTION" = 'default' ] ; then
             CEN_ACTION='enable'  ; cfg_appliances "$icfg"
             CEN_ACTION='default' ; cfg_appliances "$icfg"
@@ -290,7 +294,7 @@ actionIssue() {
             ;;
     2tes)   if [ "$arg0" = '-' ] ; then
                 [ -d "$fldr" ] || return
-                system -e -p -u - -- systemctl start centauriissue
+                system -e -p -u - -- systemctl --no-ask-password start centauriissue
                 return
             fi
             while [ "$arg0" -gt 0 ] ; do
@@ -298,7 +302,7 @@ actionIssue() {
                 timer -w 1 ; ((arg0 -= 1))
             done ; return
             ;;
-    *)      invoke -e "Invalid arguments: %s" "$*"
+    *)      invoke -e $"Invalid arguments:" "$*"
     esac
 
     ## no active session - wait a little to let boot message drain
@@ -369,21 +373,21 @@ usage() {
 
     # more help text ...
     usageset \
-        -a 'list'               "list configured appliances" \
-        -a 'default  [<appl>]'  "[*] set/remove a boot default" \
-        -a 'disable  <appl>'    "[*] disable an appliance in boot menu" \
-        -a 'enable   <appl>'    "[*] enable an appliance in boot menu" \
+        -a 'list'               $"list configured appliances" \
+        -a 'default  [<appl>]'  $"[*] set/remove a boot default" \
+        -a 'disable  <appl>'    $"[*] disable an appliance in boot menu" \
+        -a 'enable   <appl>'    $"[*] enable an appliance in boot menu" \
         -a - \
-        -a 'issue add  [<args>]' "add a issue file or an exucutable" \
-        -a 'issue clear'         "remove any pending issues" \
-        -a 'issue execute'       "show or run issues, used by 'centaurissues.service'" \
-        -a 'issue test [<wtim>]' "test for pending service, can wait until done" \
+        -a 'issue add  [<args>]' $"add a issue file or an exucutable" \
+        -a 'issue clear'         $"remove any pending issues" \
+        -a 'issue execute'       $"show or run issues, used by 'centaurissues.service'" \
+        -a 'issue test [<wtim>]' $"test for pending service, can wait until done" \
         -a - \
-        -a "[*] these actions use the 'centauriefilinux' or 'centauriraspi' tools." \
-        -a "    Grub's boot menu must be adapted manually (if used at all)."
+        -a $"[*] these actions use the 'centauriefilinux' or 'centauriraspi' tools." \
+        -a $"    Grub's boot menu must be adapted manually (if used at all)."
 
     usageset \
-        -p '<appl>'              "appliance name or index (see 'list' action)" \
+        -p '<appl>'              $"appliance name or index (see 'list' action)" \
 
     usageset \
         -t "While linux servers or workstations typically launch a stack of network" \
@@ -398,7 +402,7 @@ usage() {
         -t "to start services and other things via '${CEN_PRETTYPATH%/*}/centauriswitch'." \
         -t - \
         -l "issue" \
-        -t "This mechanism can run programs or show messages on a concole before any" \
+        -t "This mechanism can run programs or show messages on a console before any" \
         -t "GUI tool gets started. This is done via service 'centauriissue' that runs" \
         -t "'$CEN_NAME execute' when '$DAT_ISSUE_DIR' exists." \
         -t - \

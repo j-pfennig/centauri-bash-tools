@@ -1,10 +1,10 @@
-#!/bin/bash
+#!/usr/bin/bash
 # ------------------------------------------------------------------------------
 CEN_LEGAL="Dr. Jürgen Pfennig (c) 2020-2024 ; all rights reserved"
 CEN_TITLE="Automounter tool and service for local and network filesystems"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -v - '0.13:1' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -v - '0.14:2' || exit 2
 
 CEN_SVC_AFTER='networking.service network-online.target remote-fs.target'
 CEN_SVC_WANTS='avahi-daemon.service'    # service dependency

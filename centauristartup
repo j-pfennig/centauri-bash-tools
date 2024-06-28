@@ -3,13 +3,7 @@
 CEN_LEGAL=$"Dr. Jürgen Pfennig (c) 2020-2024; BSD License"
 CEN_TITLE=$"Network mode and GUI selection menu"
 
-PATH+=":${0%/*}" . _centauri_bash_lib  -a -d -t - '0.02:2' 1 || exit 2
-
-# invoke 'menu' action if called via .autologin symlink (see centaurisession)
-if [ "$CEN_NAME" = '.autologin' ] ; then
-    CEN_NAME='centauristartup'
-    [ $# = 0 ] && set -- menu
-fi
+PATH+=":${0%/*}" . _centauri_bash_lib  -a -d -t - '0.10:2' 1 || exit 2
 
 # global data
 
@@ -18,7 +12,16 @@ CEN_OPT_KIOSK=                  # see --kiosk
 
 DAT_LOGIN='centaurilogin'
 DAT_TRAP=                       # see trap_handler
-DAT_AUTOLOGIN=                  # see check_autologin
+
+# invoke 'menu' action if called via .autologin symlink (see centaurisession)
+if [ "$CEN_NAME" = '.autologin' ] ; then
+    CEN_NAME='centauristartup'
+    # bash --noprofile --norc ; exit
+    if [ $# = 0 ] ; then
+        [ "$USER" = 'kiosk' ] && CEN_OPT_KIOSK=1
+        set -- menu
+    fi
+fi
 
 # Kernel cmd line: centauriswitch=router centaurilogin=local
 #
@@ -73,8 +76,8 @@ show_display() {
     }
     DAT_RUN_MODES=()
     ___disp 0 'desktop'     $"show single-user Desktop"
-    [ -d ~kiosk ] && ___disp 1 'kiosk' $"enter Kiosk mode"
-    ___disp 1 'workstation' $"enter Multi-User mode"
+    ___disp 1 'kiosk' $"enter Kiosk mode"
+    ___disp 0 'workstation' $"enter Multi-User mode"
     ___disp 0 'maintenance' $"enter Maintenance mode"
     ___disp 0 'network'     $"change Network setup"
     show_menu "$2" "$4" "$3" "$1"
@@ -111,12 +114,20 @@ show_guiwarn() {
 }
 
 show_shutdown() {
-    local mesg="$1" leng=4
-    [ "${mesg:--}" = '-' ] && mesg=$"Run system shutdown?"
-    system -r -p -z dialog --yesno "$mesg" 5 $((leng + ${#mesg}))
+    local mesg="$1" leng=4 opts=('--yesno')
+    if [ "${mesg:--}" = '-' ] ; then
+        mesg=$"Run system shutdown?" ; leng=16
+        opts=('--extra-button' '--extra-label' $"reboot" '--yesno')
+    fi
+    system -r -p -z dialog "${opts[@]}" "$mesg" 5 $((leng + ${#mesg}))
     local stat=$?
     system -q -r -z dialog --clear
-    return $stat
+    [ -z "$1" ] || return $stat
+    case "$stat" in
+    0)  do_root 'shutdown' ;;
+    3)  do_root 'reboot' ;;
+    esac
+    return 0
 }
 
 trap_handler() {
@@ -140,7 +151,7 @@ do_guikill() {
 
 # call script action as root: <verb> [<arg>...]
 do_root() {
-    local xopt
+    local xopt logf="$TMPDIR/$CEN_NAME.log"
 
     if [ "$1" = 0 ] ; then
         shift
@@ -149,9 +160,17 @@ do_root() {
         shift
     fi
 
-    [ "$1" = 'shutdown' ] && xopt='-x'
-    embed -v -u - -z $xopt  "$CEN_NAME" -- "$@" && return 0
-    read -n1 -p $"Press any key to continue..." 1>&2
+    case "$1" in
+    reb*)   xopt='-x'
+            system -r -p -z dialog --infobox $"Reboot in progress..." 3 60 ;;
+    shu*)   xopt='-x'
+            system -r -p -z dialog --infobox $"Shutdown in progress..." 3 60 ;;
+    swi*)   system -r -p -z dialog --infobox $"Setting network mode: ""$2" 3 60 ;;
+    esac
+
+    embed -v -u - -z $xopt  "$CEN_NAME" -- "$@" 2>"$logf" 1>&2 && return 0
+    system -r -p -z dialog --yesno $"Something went wrong. Show error output?" 5 60 || return 1
+    system -r -p -z dialog --textbox "$logf" "${LINES:-24}" "${COLUMNS:-80}"
     return 1
 }
 
@@ -169,9 +188,9 @@ actionDesktop() {
 
     # start x-server
     if [ "$CEN_ACTION" = 'kiosk' ] ; then
-        embed -v -u - -- centauristartx -B -S startx -C 7 -U "${1:-kiosk}"
+        embed -v -u - -x -- centauristartx -B -S startx -C 7 -U "${1:-kiosk}"
     else
-        embed -v -u - -- centauristartx -B -S startx -C 7 -U "${1:-local}"
+        embed -v -u - -x -- centauristartx -B -S startx -C 7 -U "${1:-local}"
     fi
 }
 
@@ -182,18 +201,18 @@ actionInstall() {
     if [ "$CEN_ACTION" = 'install' ] ; then
         if [ ! "$CEN_TOOLS/$CEN_NAME" -ef ~local/'.autologin' ] && [ -d ~local ] ; then
             symlink -n -- "$CEN_TOOLS/$CEN_NAME" ~local/'.autologin'
-            system -e -p -- systemctl enable  "$CEN_ROOT/systemd/system/centauriautologin@local.service"
+     #       system -e -p -- systemctl enable  "$CEN_ROOT/systemd/system/centauriautologin@local.service"
         fi
         if [ ! "$CEN_TOOLS/$CEN_NAME" -ef ~kiosk/'.autologin' ] && [ -d ~kiosk ] ; then
             symlink -n -- "$CEN_TOOLS/$CEN_NAME" ~kiosk/'.autologin'
-            system -e -p -- systemctl enable  "$CEN_ROOT/systemd/system/centauriautologin@kiosk.service"
+     #       system -e -p -- systemctl enable  "$CEN_ROOT/systemd/system/centauriautologin@kiosk.service"
         fi
         [ -d ~homeassistant ] &&
                          symlink -n -- "$CEN_TOOLS/$CEN_NAME" ~homeassistant/'.autologin'
     else
         remove ~local/'.autologin' ~kiosk/'.autologin' ~homeassistant/'.autologin'
-        system -q -- systemctl disable  "$CEN_ROOT/systemd/system/centauriautologin@local.service"
-        system -q -- systemctl disable  "$CEN_ROOT/systemd/system/centauriautologin@kiosk.service"
+    #    system -q -- systemctl disable  "$CEN_ROOT/systemd/system/centauriautologin@local.service"
+    #    system -q -- systemctl disable  "$CEN_ROOT/systemd/system/centauriautologin@kiosk.service"
     fi
 }
 
@@ -223,12 +242,12 @@ actionMenu() {
     local mnet mgui cnet cgui tout sesn temp
 
     system -c -f dialog                 # cannot run without it
-
     trap trap_handler 1 2 3             # not 15 (SIGTERM) !!
     do_root vterm 0                     # run setups
 
     # wait up to 15s for centauriswitch
     for temp in 1 2 2 3 3 3 - ; do
+        [ "$CEN_OPT_KIOSK" = 1 ] && break
         runservice status 'centauriswitch'
         case $? in
         0)  break ;;                # running
@@ -261,7 +280,7 @@ actionMenu() {
             cnet="${DAT_SWITCH_CONF:-$DAT_SWITCH_MODE}"
             if ! show_network mnet "${cnet%disable*}" "$cnet" "$tout" ; then
                 tout=
-                show_shutdown || continue ; do_root shutdown
+                show_shutdown ; continue
             fi
             if [ "$cnet" != "$mnet" ] ; then
                 cnet="$mnet"
@@ -275,9 +294,10 @@ actionMenu() {
 
         while : ; do
             [ -n "$DAT_TRAP" ] && break     # back to network dialog
+            [ "$CEN_OPT_KIOSK" = 1 ] && tout=5
             if ! show_display mgui "${cgui:-desktop}" "$cgui" $tout ; then
                 tout=
-                show_shutdown || continue ; do_root shutdown
+                show_shutdown ; continue
             fi
             tout=
 
@@ -300,7 +320,9 @@ actionMenu() {
 actionShutdown() {
     do_guikill
     system -e -- systemctl isolate runlevel2.target
-    system -e -- systemctl --no-wall poweroff
+    local verb='poweroff'
+    [ "$CEN_ACTION" = 'reboot' ] && verb='reboot'
+    system -e -- systemctl --no-wall "$verb"
     quit
 }
 
@@ -382,7 +404,9 @@ actions() {
     wor*)
         invoke -r 'workstation' -           0   ;;
 
-    shu*)
+    reb*)
+        invoke -r 'reboot'   actionShutdown 0   ;;
+    reb*|shu*)
         invoke -r 'shutdown'    -           0   ;;
     swi*)
         invoke -r 'switch'      -           1   ;;
@@ -414,7 +438,8 @@ usage() {
        -a 'install              '$"enable autologin, link .autologin for kiosk/local" \
        -a 'kiosk                '$"start kiosk-mode gui" \
        -a 'maintenance          '$"switch to maintenance mode" \
-       -a 'shutdown             '$"poweroff the computer" \
+       -a 'reboot               '$"reboot the system" \
+       -a 'shutdown             '$"poweroff the system" \
        -a 'switch       <mode>  '$"run 'centauriswitch' to change network mode" \
        -a 'uninstall            '$"disable autologin, remove .autologin symlinks" \
        -a 'vterm      [<tnum>]  '$"activate virtual console" \
@@ -425,7 +450,7 @@ usage() {
        -t $"with action \"menu\" or if symlinked to \"~local/.autologin\", see action \"install\"." \
        -t $"This can be combined with autologin, see service \"centauriautologin\" and kernel" \
        -t $"boot parameters like \"... centauriswitch=router centaurilogin=local ...\"." \
-!EOF
+
 }
 
 # ------------------------------------------------------------------------------

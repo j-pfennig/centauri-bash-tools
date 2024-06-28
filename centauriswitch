@@ -18,7 +18,7 @@ CEN_TITLE="Network Configuration Switching"
 # These scipts are installed as (oneshot) services but are also run as tools.
 # Example: centaurisecrets (as service) runs centauriswitch (as a tool).
 # centauriroute is only used as a service in non-trivial cases, which mostly
-# start a wlan-serivce, configure a bridge/proxy or open a dialup connection.
+# start a wlan-service, configure a bridge/proxy or open a dialup connection.
 
 # When do centauriswitch|router|secrets get started?
 
@@ -137,7 +137,6 @@ CEN_SVC_NOROOT=1        # allow non-root user actions
 # don't run as a service after 'enter' was used
 inhibit "Inhibited due to 'enter' command"
 
-DAT_DIR_LIB="$CEN_ROOT/persistent"
 DAT_DIR_RUN="$CEN_ROOT/transient"
 
 # Extra option data
@@ -267,15 +266,9 @@ do_pppupdown() {
 # run centaurinetcfg after config change: -no args-
 # ------------------------------------------------------------------------------
 do_netcfg() {
-    # the library proxy should have created the persistent folder, otherwise ...
-    if [ ! -d "$DAT_DIR_LIB" ] ; then
-        message -a "Creating folder:" "$DAT_DIR_LIB"
-        folder -f -m -- "$DAT_DIR_LIB" 755
-    fi
-
-    [ "/etc/default/centaurinetcfg" -nt "$DAT_DIR_LIB/centaurinetcfg" ] || return
+    [ "$CEN_ROOT/default/centaurinetcfg" -nt "$CEN_ROOT/persistent/centaurinetcfg" ] || return
     message "Running network setup"
-    embed centaurinetcfg setup -
+    embed centaurinetcfg setup
 }
 
 # ------------------------------------------------------------------------------
@@ -777,16 +770,14 @@ actionCountry() {
 # DHCP action, run dhclient in background: up|down <iface>
 # ------------------------------------------------------------------------------
 actionDhcp() {
-    if [ ! -e "/sys/class/net/$ifce" ] ; then
-        error -p "Interface '$ifce' not found, not running dhclient" ; return
-    fi
-
-    local cpid pref="$DAT_DIR_RUN/dhclient.$2" ifce="$2"
-    pidfile -c -s cpid "dhclient.$2" || cpid=           # dhclient already running?
+    local cpid ifce pref
+    netiface -k -s ifce -e "$2" || return 1
+    pref="$DAT_DIR_RUN/dhclient.$ifce"
+    pidfile -c -s cpid "dhclient.$ifce" || cpid=        # dhclient already running?
 
     # check if ethernet if has carrier: <ifce>
     ___carrier() {
-        [ "${1::1}" = 'e' ] || return 0
+        [ "${1::1}" = 'e' ] || return 0                 # only check ethernet
         nettool -d "$1" -i link set up || return 0      # cannot check
         for tick in 0.2 0.2 0.3 0.3 0.5 1 1 2 2 3 3 '' ; do     # give it some time to settle
             [ -z "$tick" ] && break
@@ -801,16 +792,16 @@ actionDhcp() {
     ___dhclient() {
         local tick mesg="$1" opts=('-nw') ; shift
         if [ "$1" = '-x' ] ; then
-            system -q dhclient -x -pf "$pref.pid" -lf "$pref.leases" "$ifce"
+            system -q dhclient -x -pf "$pref.pid" -lf "$pref.leases"
             remove "$pref".*
         else
             remove "$pref.pid"
             if ! ___carrier "$ifce" ; then              # ethX must have carrier
                 if [ "$1" = '-w' ] ; then
-                    warning "No cable connected to '$ifce', dhclient slowly tries again"
+                    warning -p "No cable connected to '%s', dhclient slowly tries again" "$ifce"
                     opts+=('--decline-wait-time' 180)
                 else
-                    warning "No cable connected, you may have to re-run 'ifup $ifce' manually"
+                    warning -p "No cable connected, you may have to re-run 'ifup %s' manually" "$ifce"
                     opts+=('-1')
                 fi
             fi
@@ -854,6 +845,9 @@ actionDhcp() {
     up|wait)
             if [ -n "$cpid" ] ; then
                 message "dhcp client already active:" "$2" "(PID $cpid)"
+                return
+            elif [ ! -e "/sys/class/net/$ifce" ] ; then
+                error -p "Interface '%s' not found, not starting dhclient" "$ifce"
                 return
             fi
 
@@ -1156,8 +1150,8 @@ actionUpDown() {
     # report dhcp failure and ignore ...
     elif [ "$2" = 'dhcp-fail' ] ; then          # ignore this (no cable?)
         local cabl="OFF (no cable?)"
-        nettool -c -d "$ifce" -- isup && cabl="ON"
-        message -p "Interface: %-6s Reason: %-14s Carrier: %s" "$ifce" "$2" "$cabl"
+        nettool -c -d "$1" -- isup && cabl="ON"
+        message -p "Interface: %-6s Reason: %-14s Carrier: %s" "$1" "$2" "$cabl"
         return
     fi
 
@@ -1337,7 +1331,7 @@ actionUpDown() {
                 message "Setting ipv6 address for: $ifce ($_nethost_name)"
                 rbat+=(addr add "$_nethost_name" "$ifce" 6 --) ; fmet=1
             else
-                message "Already have ipv6 address for: $ifce ($fadr)"
+                message "Already have ipv6 address for:" "$ifce ($fadr)"
                 fmnm=                                   # ipv4 metric has been set
             fi
         fi
@@ -1384,9 +1378,6 @@ actionUpDown() {
             trace -a "Interface not up, no server check:" "$ifce"
         fi
     fi
-   # timer -i -
-   #[ "$CEN_ACTION" = 'up' ] && ___chkipv6
-   # timer -m
     CEN_EXIT=0                                          # make ifup/ifdown happy
 }
 
