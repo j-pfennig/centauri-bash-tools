@@ -1,10 +1,10 @@
-#!/bin/bash
+#!/usr/bin/bash
 # ------------------------------------------------------------------------------
-CEN_LEGAL="Dr. J. Pfennig (c) 2021-2023; BSD License"
+CEN_LEGAL="Dr. J. Pfennig (c) 2021-2024; BSD License"
 CEN_TITLE="User identity management tool"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -d -f -i -s -y "$0" "0.20:1" || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -d -f -i -s -y - "0.21:1" || exit 2
 
 # modules (not using autoload to help uglify to build stand-alone version)
 embed -m _centauri_bash_ext
@@ -80,7 +80,7 @@ DAT_DEF_TRIGGER="all modify delete password plugin"
 # data that can be overridden from [] config section
 
 DAT_FILE_MAP=(
-    [shell]='/bin/bash'
+    [shell]="${CEN_PATHS[1]}/bash"
     [passwd]='/etc/passwd'
     [group]='/etc/group'
     [homedir]='/home'
@@ -717,7 +717,7 @@ load_defaults() {
     DAT_FOLDER_EXTRA="${DAT_FILE_MAP["passwd-extra"]:--}"
     DAT_FOLDER_EXTRA="${DAT_FOLDER_EXTRA%/*}"
     DAT_FOLDER_HOME="${DAT_FILE_MAP["homedir"]:-/home}"
-    DAT_DEF_SHELL="${DAT_FILE_MAP["shell"]:-/bin/false}"
+    DAT_DEF_SHELL="${DAT_FILE_MAP["shell"]:-${CEN_PATHS[1]}/false}"
 
     # add defaults for 'domain' mech
     local mech=" ${DAT_GRANGE_NAME[*]} "

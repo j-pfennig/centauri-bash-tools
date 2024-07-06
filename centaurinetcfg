@@ -304,7 +304,9 @@ do_config() {
 
     ___message() {
         [ -z "$DAT_LIST" ] && return 0
-        message -a -p -- "$@" ; return 0
+#        message -a -p -- "$@" ; return 0
+        local frmt="    $1\n" ; shift
+        printf "$frmt" "$@"
     }
 
     # check for valid address (not netmask bits)

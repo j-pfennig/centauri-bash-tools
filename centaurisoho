@@ -317,10 +317,11 @@ get_architecture() {
 # Options:      -n  do not check seed, do not change working dir
 #               -q  like -n but no error messages
 #               -f  do not check seed
+#               -r  like -w with fallback to repository
 #               -w  just get workspace, do not change working dir
 # ------------------------------------------------------------------------------
 get_base() {
-    local nmsg ; [ "$1" = '-q' -o "$1" = '-w' ] && nmsg=1
+    local nmsg ; [ "$1" = '-q' -o "$1" = '-r' -o "$1" = '-w' ] && nmsg=1
     if [ -n "$SOHO_WORKSPACE" ] ; then              # previous call
         [ "$1" = '-n' -o -n "$nmsg" ] && return 0   # dont change folder
         folder -f -c -- "$SOHO_WORKSPACE" ; return 0
@@ -334,10 +335,12 @@ get_base() {
         splitkeyval  "$CEN_OPT_CURRENT" SOHO_DISTRO SOHO_CONFIG ':'
     if [ -z "$SOHO_WORKSPACE" ] ; then
         [ "$1" = '-q' ] && return 1
-        quit -e "No known workspace, use option '--base=<fldr>'"
+        [ "$1" = '-r' ] || quit -e "No known workspace, use option '--base=<fldr>'"
+        get_repository ; return
     elif [ ! -d "$SOHO_WORKSPACE/dists" ] ; then
         [ "$1" = '-q' ] && return 1
-        quit -e "Not a valid workspace" "$SOHO_WORKSPACE"
+        [ "$1" = '-r' ] || quit -e "Not a valid workspace:" "$SOHO_WORKSPACE"
+        get_repository ; return
     elif [ "$1" = '-w' ] ; then
         return 0
     elif [ -z "$SOHO_DISTRO" -o -z "$SOHO_CONFIG" ] ; then
@@ -445,6 +448,24 @@ get_path() {
     *)      fatal -t '?' "$1"
     esac
     printf -v "$3" '%s' "$_sout"
+}
+
+# ------------------------------------------------------------------------------
+# get repository path: -no args-
+# ------------------------------------------------------------------------------
+get_repository() {
+    [ -n "$DAT_REPOSITORY" ] && return 0
+    if [ -n "$SOHO_DNAME" ] ; then
+        DAT_REPOSITORY="$CEN_ROOT/configs/$SOHO_DISTRO/$SOHO_DNAME"
+        return 0
+    elif [ -d "$CEN_ROOT/shared" ] ; then
+        resolve -e -m $CEN_ROOT/shared/.. || return
+        DAT_REPOSITORY="$CEN_RESOLVE"
+        return 0
+    fi
+    error -n "Missing '$CEN_ROOT/shared', please create manually by" \
+             "running: ln -s $CEN_ROOT/configs/<dist>/<dnam>/@shared $CEN_ROOT/shared"
+    return 1
 }
 
 # ------------------------------------------------------------------------------
@@ -575,7 +596,7 @@ get_update() {
             elif [ -h "$file" ] ; then
                 list+=("$file")
             else
-                trace -a -c "File not in repo" "${file#$CEN_ROOT/}"
+                message -a -c "File not in repo" "${file#$CEN_ROOT/}"
                 ((miss += 1))
             fi
         done
@@ -603,7 +624,7 @@ get_value() {
     [ "$_prom" = '-' -o "${_dflt:--}" != '-' ] && _prom="$_dflt"
 
     printf -v _text '%s%%s[%s]' "$4" "$_prom"
-    local _leng ; printf -v _leng '%60s'
+    local _leng ; printf -v _leng '%56s'
     local _fill=$((${#_leng} - ${#_text}))
     [ "$_fill" -lt 1 ] && _fill=1
     printf -v _text "$_text" "${_leng::_fill}"
@@ -643,7 +664,7 @@ get_yesno() {
 # ------------------------------------------------------------------------------
 run_installer() {
     [ -x './installer' ] || quit -e "Install helper not found:" "$PWD/installer"
-    local opts=('./installer' "$@") # "$1" "${2:--}" "${3:--}")
+    local opts=('./installer' "$@")
     DAT_SELF="$CEN_NAME"
     dryrun -s "source ${opts[@]}" && return
     trace -a -c "Sourcing" "${opts[@]}"
@@ -898,8 +919,10 @@ actionDistr() {
 # Run docviewer
 # ------------------------------------------------------------------------------
 actionDocview() {
-    get_base -w || return                           # get base folder
-    embed -x -v -- "$SOHO_WORKSPACE/README/docviewer.dynamic" "$@"
+    get_base -r || return                           # get base folder
+    local docv="$SOHO_WORKSPACE/README/docviewer.dynamic"
+    [ -x "$docv" ] || docv="$DAT_REPOSITORY/../@soho/docviewer"
+    embed -x -v -- "$docv" "$@"
 }
 
 # ------------------------------------------------------------------------------
@@ -1136,7 +1159,7 @@ actionPack() {
 
     local ysav="$CEN_YESNO" ; CEN_YESNO='y'
     local dirs=() dist item seed fldr noex
-    for item in "dists"/[!@]* ; do
+    for item in 'dists'/[!@]* ; do
         [ -d "$item" ] || continue
         dist="${item##*/}"
 
@@ -1163,6 +1186,7 @@ actionPack() {
         confirm -y -f "Remove %s static|dynamic|configs folders" "${#dirs[@]}" &&
             remove -d -- "${dirs[@]}" 'static' 'dynamic'
     fi
+    remove 'dists'/*/@seed/seed-*-*.tgz
     matchpath -a noex -n -- * ; remove -- "${noex[@]}"
 }
 
@@ -1273,20 +1297,9 @@ succeed:
 #   <dflt>      alternate for missing <path>, no error if '-'
 # ------------------------------------------------------------------------------
 actionRepository() {
+    # get base folder and repository path
     get_base -n || return
-
-    # get repository path
-    if [ -z "$DAT_REPOSITORY" ] ; then
-        if [ -n "$SOHO_DNAME" ] ; then
-            DAT_REPOSITORY="$CEN_ROOT/configs/$SOHO_DISTRO/$SOHO_DNAME"
-        elif [ -d "$CEN_ROOT/shared" ] ; then
-            resolve -e -m $CEN_ROOT/shared/.. || return
-            DAT_REPOSITORY="$CEN_RESOLVE"
-        else
-            error -n "Missing '$CEN_ROOT/shared', please create manually by" \
-                     "running: ln -s $CEN_ROOT/configs/<dist>/<dnam>/@shared $CEN_ROOT/shared"
-        fi
-    fi
+    get_repository || return
 
     # no args: print repository information
     : ${DAT_HOST:=$HOSTNAME}
@@ -1559,10 +1572,10 @@ actionRestore() {
     [ "$name" != "$host" ] && opts+=(-N "$name")
 
     if [ -n "$rasp" ] ; then
-        confirm -a -y -f '%-46s' "Install '$name' in 'raspberry' mode" || return
+        confirm -a -y -f '%-48s' "Install '$name' in 'raspberry' mode" || return
         embed -z -v centauridisk "${opts[@]}" -M -R 512 -P$swap -- "${labl[1]}"
     else
-        confirm -a -y -f '%-46s' "Install '$name' in 'x86/pc' mode" || return
+        confirm -a -y -f '%-48s' "Install '$name' in 'x86/pc' mode" || return
         embed -z -v centauridisk "${opts[@]}" -P$swap -- "${labl[1]}"
     fi
 
@@ -1830,7 +1843,6 @@ actionVacuum() {
 actionWorkspace() {
     # archive workspace
     if [ "${1::3}" = 'arc' ] ; then
-       # get_base -f || return                       # change dir to base folder
         actionPack ; error -t || return
         run_installer 'archive' "$2"
         return
@@ -1864,8 +1876,9 @@ actionWorkspace() {
     message -a -c $"Repository" "$repo"
 
     if [ "$1" = 'get' ] ; then
+        # copy content of master folder
         embed -z centauricopy sync "$repo/@soho/master" . || return
-        run_installer unpack
+        CEN_OPT_BASE="$PWD" ; actionUnpack
     else
         for dist in dists/[a-z]* ; do
             [ -d "$dist/static" ] || continue

@@ -1395,6 +1395,9 @@ do_dial() {
         ___dev_wait "/sys/class/net/$ddev"
         nettool -d "$ddev" up || return 2
 
+        # remove default route(s), modem will add it's own
+        do_gateway - - || return 3
+
         # start dhcp client if no address is configured
         if [ "${dcfg[1]}" = '-' ] ; then
             embed -v centauriswitch dhcp wait "$ddev" || return 2

@@ -1,9 +1,9 @@
 #!/usr/bin/bash
 # ------------------------------------------------------------------------------
-CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2018-2024; BSD License"
+CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2018-2024; "$"BSD License"
 CEN_TITLE=$"Wait for Display and start X-Server"
 
-PATH+="${0%/*}" . _centauri_bash_lib -a -d -f -m svc -r -t - '0.21:2' || exit 2
+PATH+="${0%/*}" . _centauri_bash_lib -a -d -f -m svc -r -t - '0.22:2' || exit 2
 
 # Options
 CEN_OPT_CONSOLE=            # see --console
@@ -39,6 +39,8 @@ DAT_CFG_XRES=
 # dpi table, see set_mode and set_mode: <<name> <min-x-res> <dpi>>...
 DAT_DPI_INFO=('pc 0 96'  'sd 1300 104'  'hd 1900 141'   '4k 2600 172')
 
+#context -v 2                # debug output
+
 # ------------------------------------------------------------------------------
 # don't switch away for issue screen
 # ------------------------------------------------------------------------------
@@ -48,14 +50,14 @@ DAT_DPI_INFO=('pc 0 96'  'sd 1300 104'  'hd 1900 141'   '4k 2600 172')
 # ------------------------------------------------------------------------------
 has_issue() {
     [ -d "$CEN_ROOT/persistent/issue.d" ] || return 0
-    message -a "Waiting for 'centauriissue' service"
+    message -a $"Waiting for 'centauriissue' service"
     runservice -v stop 'plymouth-quit-wait'
     local maxw=30
     while [ "$maxw" -gt 0 ] ; do
         ((maxw -= 1)) ; timer -w 2
         [ -d "$CEN_ROOT/persistent/issue.d" ] || return 0
     done
-    message -a "Wait timeout, starting display manager"
+    message -a $"Wait timeout, starting display manager"
     return 1
 }
 
@@ -90,7 +92,7 @@ has_display() {
         system -r -q -- tvservice -d "$edid"
         [ -e "$edid" ] || return 1
         remove -- "$edid"
-        trace -a $"Rasberry Pi connected to HDMI display"
+        trace -a $"Raspberry Pi connected to HDMI display"
         DAT_CARD='raspi-hdmi'
         return 0
     }
@@ -107,7 +109,7 @@ has_display() {
         local xcon wtim="$1" wmax="$2" wrun wras
         # on a raspberry tvservice might be used...
         if type -t -f -p tvservice >/dev/null ; then
-            set -- "/sys/class/drm/"card?-HDMI* # any HDMI ports?
+            set -- '/sys/class/drm/'card?-HDMI* # any HDMI ports?
             [ ! -e "$1" ] && wras=1             # must not have HDMI
         fi
         if [ -n "$wras" ] ; then
@@ -174,7 +176,7 @@ has_display() {
 # ------------------------------------------------------------------------------
 usr_status_=
 usr_status() {
-    local cusr="$1" ; [ "$cusr" = "-" ] && cusr=
+    local cusr="$1" ; [ "$cusr" = '-' ] && cusr=
     local cons="${2:-0}" cbsy
     system -c -f pgrep who
     usr_status_=
@@ -183,7 +185,7 @@ usr_status() {
     local svra svri sdis scon
     local -A smap
     # pgrep can return status 1 if nothing is found
-    system -a svra -p -r -- pgrep -lax "Xorg"
+    system -a svra -p -r -- pgrep -lax 'Xorg'
     for svri in "${svra[@]}" ; do
         set -f ; set -- $svri ; set +f
         shift ; sdis= ; scon=
@@ -209,16 +211,16 @@ usr_status() {
         xusr="$1" ; xtty="$2" ; xorg="$5"
 
         # filter for user ...
-        if [ "$cons" = "0" ] ; then
+        if [ "$cons" = 0 ] ; then
             [ "${cusr:-$xusr}" = "$xusr" ] || continue
         fi
 
         # final state, running Xorg and known vt
         ucur="${umap["$xusr"]}"
-        [ "${ucur::2}" = "vt" ] && continue
+        [ "${ucur::2}" = 'vt' ] && continue
 
         # the user logged in from a tty (or display manager)
-        if [ "${xtty::3}" = "tty" ] ; then
+        if [ "${xtty::3}" = 'tty' ] ; then
             umap["$xusr"]="$xtty"
 
         # the user has a vt running Xorg (arg is DISPLAY)
@@ -226,7 +228,7 @@ usr_status() {
             xtty="${xorg//[():]/}"
             xtty="${smap["$xtty"]}"
             if [ -z "$xtty" ] ; then            # Xorg unknown...
-                if [ "${ucur::3}" = "tty" ] ; then
+                if [ "${ucur::3}" = 'tty' ] ; then
                     # the user is known has runs Xorg but we don't know
                     # the vt number. Assume he is using this tty ...
                     umap["$xusr"]="${ucur/tty/vt}"
@@ -240,7 +242,7 @@ usr_status() {
             fi
 
         # the user logged in remotely
-        elif [ "${xtty::3}" = "pts" ] ; then
+        elif [ "${xtty::3}" = 'pts' ] ; then
             [ -z "$ucur" ] && umap["$xusr"]="$xorg"
         fi
     done
@@ -249,7 +251,7 @@ usr_status() {
     for xusr in "${!umap[@]}" ; do
         xtty="${umap["$xusr"]}"
         if [ -z "$cusr" ] ; then
-            message -a -p "%-12s  =>  %s" "$xusr" "$xtty"
+            message -a -p '%-12s  =>  %s' "$xusr" "$xtty"
         else
             # check if console is busy
             if [ "$cons" != 0 ] ; then
@@ -320,7 +322,7 @@ set_conf() {
 # switch virtual terminal: -|0|N
 # ------------------------------------------------------------------------------
 set_console() {
-    if [ "${1:--}" = "-" ] ; then
+    if [ "${1:--}" = '-' ] ; then
         local sesa sesn sesi
         system -q -a sesa loginctl list-sessions --no-legend || return 1
         for sesn in "${sesa[@]}" ; do
@@ -426,8 +428,8 @@ run_startx() {
             [ -d "$XDG_RUNTIME_DIR" ] || XDG_RUNTIME_DIR="$TMP"
             export XDG_RUNTIME_DIR
         fi
-        [ -z "$xcon" ] && xcon="-keeptty"
-        xsep="--" ;;
+        [ -z "$xcon" ] && xcon='-keeptty'
+        xsep='--' ;;
     chvt)
         [ -z "$CEN_OPT_CONSOLE" ] && return 0
         xdpi= ; xcon="$CEN_OPT_CONSOLE" ;;
@@ -436,7 +438,7 @@ run_startx() {
     esac
 
     if dryrun "$CEN_OPT_SERVER" "$xsep" "$xdpi" "$xcon" ; then
-        sleep 3
+        timer -w 3
     else
         export AUTOLOGIN_STARTX=1
         system -e -- "$CEN_OPT_SERVER" $xsep $xdpi $xcon "$@"
@@ -457,7 +459,7 @@ run_displaymgr() {
     *)      return 1
     esac
 
-    PATH+=":/usr/sbin"
+    PATH+=':/usr/sbin'
     system -c "$1" || fatal -p $"Display-Manager '%s' not found" "$1"
     has_display ; set_mode                  # wait for monitor, set dm config
     system -x -f "$1" ; return 0            # does not return unless --dry
@@ -476,7 +478,7 @@ run() {
     # Option -L : list users and return status (3:=tty  4:=xorg  5:unknown)
     if [ -n "$CEN_OPT_LIST" ] ; then
         usr_status "$CEN_OPT_LIST"
-        [ "$CEN_OPT_LIST" = "-" ] && return
+        [ "$CEN_OPT_LIST" = '-' ] && return
         case "$usr_status_" in
         tty*)   message -a -p $"User '%s' uses terminal '%s'" "$unam" "$usr_status_"
                 error -s 3 ;;
@@ -493,11 +495,11 @@ run() {
         return
 
     # Option -S none : return display status (5 := no display)
-    elif [ "$CEN_OPT_SERVER" = "none" ] ; then
+    elif [ "$CEN_OPT_SERVER" = 'none' ] ; then
         has_display ; return                # return status
 
     # Option -S chvt : switch display
-    elif [ "$CEN_OPT_SERVER" = "chvt" ] ; then
+    elif [ "$CEN_OPT_SERVER" = 'chvt' ] ; then
         usr_status "$unam"
         case "$usr_status_" in
         tty*) set_console "${usr_status_:3}" ; return ;;
@@ -554,12 +556,12 @@ run() {
     system -e -p -r -- touch "${DAT_TEMP}_start"
     while [ "${DAT_TEMP}_term" -nt "${DAT_TEMP}_start" ] ; do
         message -a $"Deferring X-Server startup"
-        sleep 3 ; tcur=$((tcur + 3))
+        timer -w 3 ; ((tcur += 3))
         system -e -p -r -- touch "${DAT_TEMP}_start"
         [ "$tcur" -lt "$tmax" ] || break
     done
 
-    local csta ccon cset cfgn="-n"
+    local csta ccon cset cfgn='-n'
     if [ "$CEN_OPT_CONSOLE" = 0 ] ; then
         cset=1 ; CEN_OPT_BACKGROUND=
         system -e -p -r -s ccon -- fgconsole
@@ -573,15 +575,15 @@ run() {
         [ -x '/usr/lib/xorg/Xorg.wrap' ] || quit -e \
             $"Cannot run in background without XWrapper (xorg-xserver-legacy) installed"
         [ -n "$CEN_OPT_CONSOLE" ] && set_console "$CEN_OPT_CONSOLE"
-        background -m "old" -o ".xsession-errors" run_startx ; csta=$?
+        background -m 'old' -o '.xsession-errors' run_startx ; csta=$?
     else
         [ -n "$CEN_OPT_CONSOLE" ] && set_console "$CEN_OPT_CONSOLE"
-        run_startx &>".xsession-errors" ; csta=$?
+        run_startx &>'.xsession-errors' ; csta=$?
     fi
 
     if [ -n "$CEN_OPT_BACKGROUND" ] ; then
         message -a -p $"Started X-Server (status=%s)" "$csta"
-        sleep 1
+        timer -w 1
     else
         message -a -p $"Terminated X-Server (status=%s)" "$csta"
         [ -n "$cset" ] && set_console           # was -C0, back to Xorg
@@ -637,23 +639,23 @@ allowed_users=anybody
         ;;
 
     -B|--bac*)
-        optarg "background" -    ;;     # flag
+        optarg 'background' -    ;;     # flag
     -C|--con*)
-        optarg "console"    - -n ;;     # console#
+        optarg 'console'    - -n ;;     # console#
     -D|--dpi)
-        optarg "dpi"        - -n ;;     # number
+        optarg 'dpi'        - -n ;;     # number
     -L|--lis|--list)
-        optarg "list"       - -t ;;     # text
+        optarg 'list'       - -t ;;     # text
     -M|-mod|-mode)
-        optarg 'mode'       - "sd|pc|hd|4k|-" ;;
+        optarg 'mode'       - 'sd|pc|hd|4k|-' ;;
     -N|--now*)
-        optarg "nowait"     -    ;;     # flag
+        optarg 'nowait'     -    ;;     # flag
     -S|--ser*)
-        optarg "server"     - -t ;;     # text
+        optarg 'server'     - -t ;;     # text
     -U|--use|--user)
-        optarg "user"       - -t ;;     # text
+        optarg 'user'       - -t ;;     # text
     -X|--xre*)
-        optarg "xresources" -    ;;     # flag
+        optarg 'xresources' -    ;;     # flag
 
     esac
 }
@@ -663,43 +665,43 @@ allowed_users=anybody
 # ------------------------------------------------------------------------------
 usage() {
     usageset \
-        -o "" \
-        -o "-B --background      do not wait for server (unless --console=0)" \
-        -o "-C --console <cnum>  check if console is free, run on this console" \
-        -o "-D --dpi     <dpi>   fixed DPI for X-Server (can be reset with --mode)" \
-        -o "-L --list    <what>  List users and ttys only, don't start server" \
-        -o "-M --mode    <mode>  autoconfigure display-manager for monitor" \
-        -o "-N --nowait          do not wait for a display to be connected" \
-        -o "-S --server  <prog>  program to run, default: is startx" \
-        -o "-U --user    <user>  run as a different user" \
-        -o "-X --xresources      merge '$DAT_XRES'"
+        -o - \
+        -o '-B --background'      $"do not wait for server (unless **--console=0**)" \
+        -o '-C --console <cnum>'  $"check if console is free, run on this console" \
+        -o '-D --dpi     <dpi>'   $"fixed DPI for X-Server (can be reset with --mode)" \
+        -o '-L --list    <what>'  $"list users and ttys only, don't start server" \
+        -o '-M --mode    <mode>'  $"autoconfigure display-manager for monitor" \
+        -o '-N --nowait'          $"do not wait for a display to be connected" \
+        -o '-S --server  <prog>'  $"program to run, default is:"" 'startx'" \
+        -o '-U --user    <user>'  $"run as a different user" \
+        -o '-X --xresources'      $"merge with"" '$DAT_XRES'"
 
     usageset \
-        -l "arguments" \
-        -t "<cnum>       console to use  -or- '0' for current console without check" \
-        -t "<dpi>        dpi value passed to server <prog> (not for lightdm/sddm)" \
-        -t "<mode>       monitor resolution: 'pc|sd|hd|4k' use '-' for autodetect" \
-        -t "<what>       can by a user-name or '-' for everyone" \
-        -t "<prog>       program to run: none|chvt|auto|startx|sddm|lightdm|<path>" \
-        -t "<user>       a user name  -or-  '-' to disable check"
+        -p '<cnum>'      $"console to use  -or- '0' for current console without check" \
+        -p '<dpi>'       $"dpi value passed to server <prog> (not for lightdm/sddm)" \
+        -p '<mode>'      $"monitor resolution: 'pc|sd|hd|4k' use '-' for autodetect" \
+        -p '<what>'      $"can by a user-name or '-' for everyone" \
+        -p '<prog>'      $"program to run: none|chvt|auto|startx|sddm|lightdm|<path>" \
+        -p '<user>'      $"a user name  -or-  '-' to disable check"
 
     usageset \
-        -l "examples" \
-        -t "$CEN_NAME -C 0                    # startx for current user and console" \
-        -t "$CEN_NAME -C 10 -D 125            # startx at vt10, override dpi value" \
-        -t "" \
-        -t "$CEN_NAME -U otto                 # start XServer for otto" \
-        -t "$CEN_NAME -U otto -S none         # test if otto is logged in" \
-        -t "$CEN_NAME -U otto -S chvt         # switch to ottos's console" \
-        -t "" \
-        -t "$CEN_NAME -M -                    # auto-update configuration" \
-        -t "" \
-        -t "$CEN_NAME -N                      # just test for connected display" \
-        -t "$CEN_NAME -S none -v              # just wait for connected display" \
-        -t "$CEN_NAME -S auto                 # wait and start lightdm or sddm" \
-        -t "$CEN_NAME -S lightdm -M -         # wait and start lightdm, autoconfig" \
-        -t "$CEN_NAME -S sddm -M hd -D 132    # ... override DPI setting" \
-        -l "configuration" \
+        -e "$CEN_NAME -C 0                    # startx for current user and console" \
+        -e "$CEN_NAME -C 10 -D 125            # startx at vt10, override dpi value" \
+        -e - \
+        -e "$CEN_NAME -U otto                 # start XServer for otto" \
+        -e "$CEN_NAME -U otto -S none         # test if otto is logged in" \
+        -e "$CEN_NAME -U otto -S chvt         # switch to ottos's console" \
+        -e - \
+        -e "$CEN_NAME -M -                    # auto-update configuration" \
+        -e - \
+        -e "$CEN_NAME -N                      # just test for connected display" \
+        -e "$CEN_NAME -S none -v              # just wait for connected display" \
+        -e "$CEN_NAME -S auto                 # wait and start lightdm or sddm" \
+        -e "$CEN_NAME -S lightdm -M -         # wait and start lightdm, autoconfig" \
+        -e "$CEN_NAME -S sddm -M hd -D 132    # ... override DPI setting"
+
+    usageset \
+        -l $"configuration" \
         -t "# $CEN_ROOT/default/$CEN_NAME can be used to preset options:" \
         -t "[ -z \"\$CEN_OPT_DPI\" ] && CEN_OPT_DPI=132" \
         -t "[ -z \"\$CEN_OPT_MODE\" ] && CEN_OPT_MODE=hd" \
@@ -708,6 +710,10 @@ usage() {
 $CEN_USE_HEADER
 
 $CEN_USE_OPTIONS
+
+$CEN_USE_PARAMS
+
+$CEN_USE_EXAMPLE
 
 $CEN_USE_OTHER
 !EOF

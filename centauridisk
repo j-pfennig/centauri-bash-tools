@@ -276,7 +276,7 @@ run() {
     [ -n "$CEN_OPT_FILE" -a -n "$CEN_OPT_PART" ] &&
         quit -e "Options '--part' and '--swap' are exclusive"
 
-    if [ -n "$CEN_OPT_RASPI" ] ; then                   # raspiberry /boot
+    if [ -n "$CEN_OPT_RASPI" ] ; then                   # raspberry /boot
         CEN_OPT_BIOS=1 ; CEN_OPT_MSDOS=1 ; DAT_NO_BOOT=2
         if [ "$CEN_OPT_RASPI" -lt 256 ] ; then
             CEN_OPT_RASPI=256
@@ -327,7 +327,7 @@ run() {
         else
             [ -n "$CEN_OPT_BIOS" -a -z "$CEN_OPT_RASPI" ] && DAT_ARCH_BOOT=
         fi
-        [ -n "$DAT_ARCH_BOOT" -a ! -r "$DAT_ARCH_BOOT" ] && error "Cannot read: $DAT_ARCH_BOOT"
+        [ -n "$DAT_ARCH_BOOT" -a ! -r "$DAT_ARCH_BOOT" ] && error "Cannot read:" "$DAT_ARCH_BOOT"
     fi
 
     error -q ; context -r -t +

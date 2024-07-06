@@ -491,9 +491,9 @@ do_restore() {
     # do an ntfs-image restore
 
     if [ -n "$isimg" ] ; then
+        message -a -p "Restore '%s' from '%s' ..." "$dest" "${file##*/}"
         do_chk_part "$dest" || return
         dest="$CEN_FLG_PART"
-        message -a "Restore '$dest' from '$file' ..."
         if [ -z "$xpand" ] ; then
             system -f ntfsclone --restore-image --overwrite "$dest" "$file"
         else
@@ -506,8 +506,8 @@ do_restore() {
 
     # restore a tar-archive
 
+    message -a -p "Restore '%s' from '%s' ..." "$dest" "${file##*/}"
     folder -r -c -m -f -s dest "$CEN_FLG_MOUNT/$dest"
-    message -a "Restore '$dest' from '${file##*/}' ..."
     system -f tar -xf "$file" --overwrite --recursive-unlink $compr $CEN_TAR_OPTS "$@"
 
     # change things like "/mnt/xxx/home/home" to "/mnt/xxx/home"

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # ------------------------------------------------------------------------------
 CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2019-2024; BSD License"
 CEN_TITLE="Samba-AD/Kerberos/NFS management tool"
@@ -244,7 +244,7 @@ server_info() {
 # ------------------------------------------------------------------------------
 actionClient() {
     # tool k5start is in debain package kstart ...
-    local gssm=('k5start' 'adcli') gpak=('kstart' 'adcli')
+    local gssm=('kinit' 'adcli') gpak=('krb5-user' 'adcli')
     local opts ; [ -n "$CEN_OPT_FORCE" ] && opts='--force'
 
     # -------------------------------- kerberos --------------------------------
@@ -703,7 +703,7 @@ actionProvision() {
 # ------------------------------------------------------------------------------
 actionRenew() {
     local user="${1:--}" item
-    if [ "$user" = '+' ] ; then             # renew all tickets via chaches
+    if [ "$user" = '+' ] ; then             # renew all tickets via caches
         system -e -c kinit krenew || return
         context -r || return
         for item in /tmp/krb5cc_* ; do
@@ -917,7 +917,7 @@ access_provider = ad
 cache_credentials = true
 krb5_store_password_if_offline = True
 fallback_homedir = /home/%u
-default_shell = /bin/bash
+default_shell = ${CEN_PATHS[1]}/bash
 
 # use real unix ids as stored in AD
 ldap_id_mapping = false
@@ -1045,7 +1045,7 @@ actionUser() {
     local fgid="${flds[3]:-100}"
     local fgco="${flds[4]}"
     local fdir="${flds[5]:-/home/$fnam}"
-    local frun="${flds[6]:-/bin/bash}"
+    local frun="${flds[6]:-${CEN_PATHS[1]}/bash}"
     [ "${fdir::1}" != "/" ] && fdir="/tmp"
     [ "${frun::1}" != "/" ] && frun="/usr/sbin/nologin"
 

@@ -1419,6 +1419,17 @@ actionWpa() {
     [ "$ssid" = '-' ] && ssid="${DAT_WLAN_SSID:--}"
     [ "$spsk" = '-' ] && spsk="${DAT_WLAN_PASW:--}"
 
+    # do we need a country code?
+    local cntr='#country=XX'
+    if netoption 'country' "$CEN_OPT_HOST" ; then
+        local line zone ftab='/usr/share/zoneinfo/zone.tab'
+        if [ -r "$ftab" ] && resolve -l '/etc/localtime' ; then
+            zone="${CEN_RESOLVE##*zoneinfo/}"
+            txtgrep -s line -m -y "[A-Z][A-Z]*[[:space:]]$zone*" -i - <"$ftab"
+            [ -n "$line" ] && cntr="country=${line::2}"
+        fi
+    fi
+
     # get wpa file (always lower-case) and return if existing
     do_wpa_check -g file "${ssid,,}"
     if [ "$spsk" = '-' -a -z "$CEN_OPT_FORCE" ] && [ -e "$file" ] ; then
@@ -1439,8 +1450,8 @@ actionWpa() {
 
     # build array with defaults
     data=('ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev'
-          '#for interfaces monitored by centauriswitch no country code should be set...'
-          '#country=XX'
+          '#for interfaces monitored by centauriswitch the country is optional ...'
+          $cntr
           'network={'
           "    ssid=\"$ssid\""
           '    scan_ssid=1'

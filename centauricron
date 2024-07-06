@@ -60,7 +60,7 @@ default_hourly() {
 # Daily default script
 # ------------------------------------------------------------------------------
 run_inhibit() {
-    local inhi="/bin/systemd-inhibit"
+    local inhi="${CEN_PATHS[1]}/systemd-inhibit"
     if [ -x "$inhi" ] ; then
         $inhi --what=handle-power-key:shutdown --who="$CEN_NAME" \
               --why="Running: $*" --mode=block $*
@@ -173,10 +173,10 @@ default_shutdown() {
     remove "$DAT_MIDNIGHT"
 
     # run daily shutdown if configured
-    [ -f "/etc/default/daily_shutdown" ] && . "/etc/default/daily_shutdown"
+    [ -f "${CEN_PATHS[6]}/daily_shutdown" ] && . "${CEN_PATHS[6]}/daily_shutdown"
     [ -n "$SHUTDOWN_TIME" ] || return
 
-    message -a "daily shutdown triggered by /etc/default/daily_shutdown"
+    message -a "daily shutdown triggered by ${CEN_PATHS[6]}/daily_shutdown"
     system -e -p -- shutdown -h "$SHUTDOWN_TIME" "$SHUTDOWN_MESSAGE"
 }
 
@@ -356,7 +356,7 @@ $(___list "$1")
 autoshutdown() {
     local down hhmm mesg="trace -a"
     [ "$1" = "-v" ] && mesg="message -a"
-    [ -f "/etc/default/daily_shutdown" ] && . "/etc/default/daily_shutdown"
+    [ -f "${CEN_PATHS[6]}/daily_shutdown" ] && . "${CEN_PATHS[6]}/daily_shutdown"
 
     if [ -z "$SHUTDOWN_TIME" ] ; then
         $mesg "Daily shutdown not configured"

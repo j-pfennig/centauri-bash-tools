@@ -1,9 +1,9 @@
-#!/bin/bash
+#!/usr/bin/bash
 # ------------------------------------------------------------------------------
-CEN_LEGAL="Dr. Jürgen Pfennig (c) 2020-2023; BSD License"
+CEN_LEGAL="Dr. Jürgen Pfennig (c) 2020-2024; BSD License"
 CEN_TITLE="Run a program or shell in a chroot environment"
 
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m ext -y "$0" '0.07:1' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m ext -y - '0.08:1' || exit 2
 # don't use win (which would pull-in ext, ins and sys) in package to save space
 [ -z "$CEN_PACKAGE" ] && embed -m _centauri_bash_win
 
@@ -38,7 +38,7 @@ do_chroot() {
         unset LC_TIME LANG
         LC_ALL=C
     fi
-    export TMP="/tmp" TMPDIR="/tmp"
+    export TMP='/tmp' TMPDIR='/tmp'
     chroot "$CEN_OPT_BASE" "$@"
 }
 
