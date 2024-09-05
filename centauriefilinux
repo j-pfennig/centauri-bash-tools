@@ -4,9 +4,10 @@ CEN_LEGAL="Dr. J. Pfennig (c) 2021-2024; BSD License"
 CEN_TITLE="Tool to manage EFI boot and to create systemd-boot menu and UKI"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -s -y - '0.23:2' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -s -y - '0.24:2' || exit 2
 
 CEN_OPT_BASE=           # see --base, EFI partition mount point
+CEN_OPT_IFNAMES=        # see --ifnames
 CEN_OPT_IMAGE=          # see --image, kernel efi image, relative to DAT_EFIDIR
 CEN_OPT_NICKNAME=       # see --nickname, suffix for image folder and loader entries
 CEN_OPT_PLAIN=          # see --plain (<empty>:=shim+mok  1:=shim 2:mok 3:=nothing)
@@ -946,7 +947,17 @@ actionMenu() {
     local opt2='splash loglevel=3'
     local resu="resume="
 
-    netoption 'sysdnames' "$host" || opt1="net.ifnames=0 $opt1"
+    local ifna
+    case "$CEN_OPT_IFNAMES" in
+    0)  ifna=0 ;;
+    1)  ifna=1 ;;
+    *)  if  [ "$DAT_ETCDIR/systemd/network/99-default.link" -ef '/dev/null' ] ; then
+            ifna=0
+        elif netoption 'sysdnames' "$host" ; then
+            ifna=1
+        fi
+    esac
+    [ -n "$ifna" ] && opt1="net.ifnames=$ifna $opt1"
 
     # entry for appliance
     if [ -n "$appl" ] ; then
@@ -993,7 +1004,7 @@ actionMenu() {
     [ -e "$DAT_MOUNT$grub" ] || grub='/EFI/grub/grubx64.efi'
 
     do_entry 90 "$mode"             "$dist" "$root" "$resu"   "$netw" "$opt1" "$opt2"
-    do_entry 50 "maintenance mode"  "$dist" "$root" 'resume=' "$netw" "$opt1" \
+    do_entry 80 "maintenance mode"  "$dist" "$root" 'resume=' "$netw" "$opt1" \
                                     'nosplash systemd.show_status=1 systemd.unit=runlevel2.target'
     $nmen    40 "networking menu"   "$dist" "$root" 'resume=' "centauriswitch=router" "$opt1" \
                                     'nosplash centaurilogin=local systemd.unit=runlevel2.target'
@@ -1143,6 +1154,7 @@ options() {
             ;;
 
     -B|--bas|--base)    optarg 'base'        -   -d  ;;     # folder
+    -F|--ifn*)          optarg 'ifnames'     -   -o  ;;     # ternary
     -I|--img|--ima*)    optarg 'image'       -   -t  ;;     # text
     -N|--nic*)          optarg 'nickname'    -   -t  ;;     # text
     -P|--pla*)          optarg 'plain'       -   -f  ;;     # flag
@@ -1187,11 +1199,12 @@ usage() {
     do_mount -h ; do_suffix
     usageset \
         -o - \
-        -o "-B --base     <path> "$"EFI mount point or EFI folder (default: $DAT_MOUNT)" \
-        -o "-I --image    <file> "$"relative linux EFI image path (default: $DAT_IMAGE)" \
-        -o "-N --nickname <nick> "$"force distribution nick name  (default: $CEN_OPT_NICKNAME)" \
-        -o "-P --plain           "$"ignore secure boot shim, mok and signing" \
-        -o "-R --root     <path> "$"root file sytem to be used    (default: /)"
+        -o '-B --base     <path> '$"EFI mount point or EFI folder (default: $DAT_MOUNT)" \
+        -o '-F --ifnames  <mode> '$"Interface naming (0:=kernel  1:=systemd  2:=auto)" \
+        -o '-I --image    <file> '$"relative linux EFI image path (default: $DAT_IMAGE)" \
+        -o '-N --nickname <nick> '$"force distribution nick name  (default: $CEN_OPT_NICKNAME)" \
+        -o '-P --plain           '$"ignore secure boot shim, mok and signing" \
+        -o '-R --root     <path> '$"root file sytem to be used    (default: /)"
 
     usagecat << !EOF
 $CEN_USE_HEADER

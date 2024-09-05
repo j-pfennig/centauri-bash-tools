@@ -17,6 +17,12 @@ CEN_SVC_NOROOT=1
 # folder for issue data
 DAT_ISSUE_DIR="$CEN_ROOT/persistent/issue.d"
 
+# invoke 'issue' action if called via .autologin symlink (see centaurisession)
+if [ "$CEN_NAME" = '.autologin' ] ; then
+    CEN_NAME='centaurisysinit'
+    set -- issue execute
+fi
+
 # ------------------------------------------------------------------------------
 # appliances configuration support
 # ------------------------------------------------------------------------------
@@ -28,25 +34,60 @@ DAT_APPL_MODE=
 DAT_APPL_CONF=
 DAT_APPL_ARGS=
 DAT_APPL_AUTO=
+# see apptimers() ...
+DAT_APPL_TIMERS=
+# see appusers() ...
+DAT_APPL_USERS=
 
 # homeassistant user
 DAT_APPL_HASS='homeassistant'
 
-# dummy function to skip 'appliance' config lines
+# dummy functions to skip 'appliance' config lines
 appliance() { : ; }
+apptimers() { : ; }
+appusers()  { : ; }
+
+# get home folder: <name>
+get_home() {
+    local indx user home
+    case "$1" in
+    local)          user="${DAT_APPL_USERS[0]}" ;;
+    homeassistant)  user="${DAT_APPL_USERS[1]}" ;;
+    kiosk)          user="${DAT_APPL_USERS[2]}" ;;
+    *)              listsearch -n indx -i DAT_APPL_USERS -- "$1"
+                    [ "${indx:-0}" -gt 2 ] && user="${DAT_APPL_USERS[indx]}"
+    esac
+    [ "${user:--}" = '-' ] && user="$1"
+    eval home=~"$user"
+    [ -d "$home" ] || return 2
+   # trace "USER=$user   HOME=$home"
+    [ -e "$home/.autologin" ] || return 3
+    [ "$home/.autologin" -ef '/dev/null' ] && return 4
+    return 0
+}
 
 get_appliances() {
     [ -n "$DAT_APPL_LABEL" ] && return 0        # already loaded
 
     ___appl_reader() {                          # reader callback
-        [ "${1::9}" = 'appliance' ] || return 0
+        [ "${1::3}" = 'app' ] || return 0
         set -f ; eval set -- $1 ; set +f
+        case "$1" in
+        appliance) ;;
+        apptimers) shift ; DAT_APPL_TIMERS=("$@") ; return 0 ;;
+        appusers)  shift ; DAT_APPL_USERS=("$@") ; return 0 ;;
+        *)         return 0
+        esac
 
         # user kiosk or homeassistant must exist for these appliances
-        local auto
+        local auto stat
         if [[ "$6" == *centaurilogin=* ]] ; then
              auto="${6#*centaurilogin=}" ; auto="${auto%% *}"
-             system -q -r -- getent passwd "$auto" || return 0
+             get_home "$auto" ; stat="$?"
+             if [ "$stat" != 0 ] ; then
+                trace -a -c -p "Appliance ignored" "status %d - %s" "$stat" "$6"
+                return 0
+             fi
         fi
 
         DAT_APPL_LABEL+=("$2") ; DAT_APPL_LEVEL+=("$3")
@@ -73,7 +114,8 @@ cfg_appliances() {
                 embed -v centauriraspi -y default
             fi ; return
             ;;
-    [1-9])  indx="$(($1 - 1))"
+    [1-9]|1[0-9])
+            indx="$(($1 - 1))"
             if [ -z "${DAT_APPL_LABEL[indx]}" ] ; then
                 invoke -e $"Invalid appliance index:" "$1" ; return
             fi
@@ -93,8 +135,10 @@ cfg_appliances() {
 
     if [ "$acmd" != 'delete' ] ; then
         local opti="${DAT_APPL_CONF[indx]}"
-        netoption "$opti" "$HOSTNAME" ||
-            warning -p "Appliance '%s' is not in network config, no automatic setup" "$name"
+        if [ "${opti:--}" != '-' ] ; then
+            netoption "$opti" "$HOSTNAME" ||
+                warning -p "Appliance '%s' is not in network config, no automatic setup" "$name"
+        fi
     fi
 
     if [ "$acmd" = 'create' ] ; then
@@ -109,7 +153,7 @@ cfg_appliances() {
     fi
 
     if [ -d '/boot/efi/loader' ] ; then
-        acmd="4$((indx + 1))"
+        acmd="$((indx + 41))"
         case "$CEN_ACTION" in
             enable)      embed -v centauriefilinux -y menu --- "$acmd" create "$name" "${args[@]}" ;;
             disable)     embed -v centauriefilinux -y menu --- "$acmd" delete ;;
@@ -171,7 +215,8 @@ run_appliances() {
     case "$netw" in
         router:*)   ;;
         switch:*)   ;;
-        *)          netw=                       # no network services
+        *)          [ -z "$auto" ] && return    # no appliance to run
+                    netw=                       # no network services
     esac
     message -a -c $"Appliance mode" "${netw:-$auto}"
 
@@ -183,32 +228,78 @@ run_appliances() {
     fi
 
     # centaurilogin action ...
-    if [ "$auto" = "$DAT_APPL_HASS" ] ; then
-        message -a -c $"Start service" 'centaurihass'
-        system -e -p -- systemctl --no-block start centaurihass
-    elif [ -n "$auto" ] ; then
-        message -a -c $"Autologin user" "$auto"
-        system -e -p -- systemctl --no-block start centauriautologin@"$auto"
+    if [ -n "$auto" ] ; then
+        local hdir ; eval hdir=~$auto
+        if [ "$auto" = "$DAT_APPL_HASS" ] ; then
+            message -a -c $"Start service" 'centaurihass'
+            system -e -p -- systemctl --no-block start centaurihass
+        fi
+        if [ -e "$hdir/.autologin" ] && [ "$hdir/.autologin" != '/dev/null' ] ; then
+            message -a -c $"Autologin user" "$auto"
+            system -e -p -- systemctl --no-block start centauriautologin@"$auto"
+        fi
     fi
 
-    # enable anacron and swap ...
-    system -w -p -- systemctl --no-block start anacron.timer centauriswap
+    # 'timers' config statement
+    local item list=()
+    for item in "${DAT_APPL_TIMERS[@]}" 'centauriswap.service' ; do
+        [ "${item%.*}" = "$item" ] && item+='.timer'
+        list+=("$item")
+    done
+    # enable timers and swap ...
+    system -w -p -- systemctl --no-block start "${list[@]}"
 }
 
 # ------------------------------------------------------------------------------
 # called at service start
 # ------------------------------------------------------------------------------
-run() {
+run_netconfig() {
+#    # adjust interface naming
+#    local imok='systemd'
+#    netiface -n             # stat=0 ifnames=0    stat=1 ifnames=1
+#    case "$?" in
+#    0)  imok='bios' ;;
+#    1)  remove "${CEN_PATHS[2]}/systemd/network/99-default.link" ;;
+#    *)  [ "${CEN_PATHS[2]}/systemd/network/99-default.link" -ef '/dev/null' ] && imok='bios'
+#    esac
+
+    # make sure to have cached network config
     if [ "${CEN_PATHS[6]}/centaurinetcfg" -nt "$CEN_ROOT/persistent/centaurinetcfg" ] ; then
-        message $"Updating network configuration cache"
+        message -c $"Network config" $"configuration update"
         embed centaurinetcfg setup
+        netconfig -r                # re-read configuration
     fi
+
+    # get the following info: <host> <method> <ifnames>
+    local imog ; readline -a imog -i "$CEN_ROOT/persistent/centaurinetgen"
+    local icon ; netquery -s icon 'connect'
+    local imok ; netiface -k && imok='systemd' || imok='bios'
+    local mesg
+    if [ "${imog[0]}" != "$HOSTNAME" ] ; then
+        message -c $"Network config" $"hostname changed"
+        embed centaurinetcfg setup -
+    elif [ "${imog[1]}" != "$icon" ] ; then
+        message -p -c $"Network config" $"connect method changed to '%s'" "$icon"
+        embed centaurinetgen --keep interfaces
+    elif [ "${imog[2]}" != "$imok" ] ; then
+        message -p -c $"Network config" $"naming mode changed to '%s'" "$imok"
+        embed -d -v centaurinetgen --keep interfaces
+    fi
+}
+
+run() {
+    if [ -w '/dev/console' ] ; then
+        echo "System startup..." >/dev/console
+    fi
+
+    # update networking
+    run_netconfig
 
     # get script path and source it
     local scrp="${CEN_PATHS[6]}/$CEN_NAME"
     if [ -e "$scrp" ] ; then
         message -c $"Running script" "$scrp"
-        . "$scrp"
+        source "$scrp"
         run_appliances
     else
         warning -c $"Missing script" "$scrp"
@@ -226,15 +317,21 @@ actionConfig() {
         embed centaurinetcfg setup -
     fi
 
+    # migrate systemd boot entry 50 -> 80
+    if [ -e '/boot/entries/50-maintenance-mode-bookworm.conf' ] ; then
+        rename '/boot/entries/50-maintenance-mode-bookworm.conf' \
+               '/boot/entries/80-maintenance-mode-bookworm.conf'
+    fi
+
     get_appliances || return
 
     if [ $# -gt 0 ] ; then
         cfg_appliances "$1" ; return
     fi
 
-    message -m $"Configured appliances are:" ''
-    if [ "$CEN_ACTION" = 'default' ] ; then
-        message -i '0:' $"Default boot mode"
+    message -a -m $"Selectable boot modes and appliances are:" ''
+    if [ "$CEN_ACTION" = 'default' -o "$CEN_ACTION" = 'list' ] ; then
+        message -a -m ' 0: '$"Default boot mode"
         wrds+=' 0' ; frst=0
     fi
 
@@ -249,7 +346,7 @@ actionConfig() {
             opti=' [*]' ; optw=1
         fi
         ((indx += 1)) ; wrds+=" $indx"
-        message -i "$indx:" "${DAT_APPL_LABEL[indx-1]}$opti"
+        message -i -p '%2s: %s' "$indx" "${DAT_APPL_LABEL[indx-1]}$opti"
     done
     message -i ' '
     if [ -n "$optw" ] ; then
@@ -270,22 +367,26 @@ actionConfig() {
 }
 
 # ------------------------------------------------------------------------------
-# action config:    add   <file> <args>     # must be execute to have args
+# action config:    add   [<file> [<args>]] # must be executable to have args
 #                   clear                   # no args
 #                   exec                    # no args
 #                   test  <wtim>            # optional arg
 # ------------------------------------------------------------------------------
 actionIssue() {
     local fldr="$DAT_ISSUE_DIR" cmd3="${1::3}" arg0="$2" arg1="$3"
-    [ "$cmd3" = 'tes' ] || context -r
+    [ "$cmd3" = 'exe' -o "$cmd3" = 'tes' ] || context -r
     case "$#$cmd3" in
-    2add)   folder -f -m -- "$fldr" ; copy -a -- "$2" "$fldr" ; return
+    1add)   folder -f -m -- "$fldr"
+            create -c -- "$fldr/$EPOCHSECONDS" 644 ; return
+            ;;
+    2add)   folder -f -m -- "$fldr"
+            copy -a -- "$2" "$fldr" ; return
             ;;
     ?add)   sysfind -f -s arg0 -- "$arg0"
             arg1="${2##*/} ${*:3}" ; arg1="${arg1//[\.\/[:space:]]/_}"
             folder -f -m -- "$fldr"
             local list=("#!$BASH" "$arg0 ${*:3}")
-            create -v list -c "$fldr/$arg1" 775 ; return
+            create -v list -- "$fldr/$arg1" 775 ; return
             ;;
     1cle)   remove -d -- "$fldr" ; return
             ;;
@@ -305,16 +406,20 @@ actionIssue() {
     *)      invoke -e $"Invalid arguments:" "$*"
     esac
 
-    ## no active session - wait a little to let boot message drain
+    # --- execute - do we have anything to display? ---
+
+    set -- "$fldr"/* ; [ -e "$1" ] || return
+
+    # no active session - wait a little to let boot message drain
     if runservice status 'sddm' || runservice status 'lightdm' ; then
         timer -w 1
     else
         timer -w 5
     fi
 
-    setupcon --current-tty
+    system -q -- setupcon --current-tty
     local item
-    for item in "$fldr"/* ; do
+    for item in "$@" ; do
         if [ -x "$item" ] ; then
             "$item"
         else
@@ -338,7 +443,8 @@ actionIssue() {
     done
 
     [ -n "$sesi" ] && system -e -p loginctl activate "$sesi" && return
-    read -N1 -p $"Cannot find active console, use <Alt><Fn> to switch manually"
+    read -N1 -t2 -p $"Cannot find active console, use <Alt><Fn> to switch manually"
+    echo
     system -q chvt 1
 }
 

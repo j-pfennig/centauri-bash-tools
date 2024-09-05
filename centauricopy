@@ -1,13 +1,13 @@
 #!/bin/bash
 # ------------------------------------------------------------------------------
-CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2013-2023; BSD License"
+CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2013-2024; BSD License"
 CEN_TITLE="Tool to copy folders recursively using rsync"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -i -m bat -m con -s -y "$0" "0.54:2" || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -i -m bat -m con -s -y - '0.55:2' || exit 2
 
 # Data
-DAT_PASSWORD="/$CEN_ROOT/secrets/rsync_trusted"
+DAT_PASSWORD="$CEN_ROOT/secrets/rsync_trusted"
 DAT_RUN_IMPLIED=
 DAT_EXCLUDE=                    # filled by do_exclude
 DAT_COUNTER=0                   # copied + deleted files
@@ -25,7 +25,7 @@ CEN_OPT_HARDLINKS=      # see --hardlinks
 CEN_OPT_LOCAL=          # see --local
 CEN_OPT_MORE=           # see --more
 CEN_OPT_NOCOPY=         # see --nocopy
-CEN_OPT_ONE=            # see --onoe
+CEN_OPT_ONE=            # see --one
 CEN_OPT_OPTION=()       # see --option
 CEN_OPT_PASSWORD=       # see --password
 CEN_OPT_PROXY=          # see --proxy
@@ -40,7 +40,7 @@ do_folder_=
 do_folder() {
     # remove trailing slash
     do_folder_="${1%/}"
-    [ "$1" = "/" ] && do_folder_="/"
+    [ "$1" = '/' ] && do_folder_='/'
     [ "$1" = "." ] && do_folder_="$PWD"
     # return error if remote folder
     if [ "${do_folder_##*:}" != "$do_folder_" ] ; then
@@ -148,7 +148,7 @@ actionSync() {
     fi
 
     # get the backup folder
-    if [ "$CEN_OPT_BACKUP" = "-" ] ; then
+    if [ "$CEN_OPT_BACKUP" = '-' ] ; then
         [ -z "$base" ] &&
             fatal "cannot use '--backup=-' on remote destination"
         CEN_OPT_BACKUP=
@@ -166,14 +166,14 @@ actionSync() {
     # implement --folder
     if [ -z "$CEN_OPT_FOLDER" ] ; then
         [ -z "${orig##*:}" ] && orig+="."
-        orig+="/"
+        orig+='/'
     fi
     ___message "$info: $orig  =>  $dest"
 
     # get the rsync password
     if [ "${CEN_OPT_PASSWORD:-#}" != "#" ] ; then
         export RSYNC_PASSWORD
-        if [ "$CEN_OPT_PASSWORD" != "-" ] ; then
+        if [ "$CEN_OPT_PASSWORD" != '-' ] ; then
             if [ "$CEN_OPT_PASSWORD" = "+" ] ; then
                 CEN_OPT_PASSWORD="$DAT_PASSWORD"
             elif [ ! -r "$CEN_OPT_PASSWORD" ] ; then

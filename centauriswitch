@@ -997,10 +997,11 @@ actionStart() {
 
     if [ "$CEN_ACTION" = 'enter' ] ; then
         nettemp  -c "$CEN_NAME-disable"     # inhibit start via dependency
-    fi #else
-        # parse centauriswitch kernel arg, create centauriswitch status file
-        embed -v centauriroute -t init "$@" || return
-   # fi
+    fi
+
+    # parse centauriswitch kernel arg, create centauriswitch status file
+    embed -v centauriroute -t init "$@" || return
+
     nettemp && . "$_nettemp"
     do_override -i                          # init override files
 

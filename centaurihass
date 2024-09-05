@@ -4,7 +4,7 @@ CEN_LEGAL="Dr. J. Pfenig (c) 2023-2024; BSD License"
 CEN_TITLE=$"Tool to (un)install and run Home Assistant"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -y - '0.14:2' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -y - '0.15:2' || exit 2
 
 # Data
 DAT_BASE='/opt/HomeAssistant'
@@ -12,6 +12,7 @@ DAT_HOME="$DAT_BASE/home"
 DAT_VENV="$DAT_BASE/homeassistant"
 
 # data for extra options
+CEN_OPT_USER='homeassistant'
 CEN_OPT_VERSION='2024.1.6'
 
 # ------------------------------------------------------------------------------
@@ -21,9 +22,16 @@ actionAutorun() {
     folder -b 'persistent' -c -f
     local word
     if ! listsearch -u -m word -- "${1:-status}" 'on' 'off' 'status' ; then
-        invoke -e "Argument must be one of: on off status" ; return
+        invoke -e "Argument must be one of:" 'on off status' ; return
     fi
-# TODO autologin
+
+    # we use 'centaurihass.enabled' to control if HA should run or not. This is
+    # why we only enable the service but never disable it. The service unit checks
+    # for 'centaurihass.enabled'.
+
+    # The 'centaurisysinit' service starts 'centaurihass.service', even if not
+    # enabled, when kernel parameter 'centaurilogin=HomeAssistant' is set.
+
     case "$word" in
     on)     create -- 'centaurihass.enabled'
             system -q systemctl is-enabled 'centaurihass.service' || system -e -p \
@@ -50,10 +58,10 @@ actionDeps() {
 #   step 2: build python stuff (must run as homeassistant)
 # ------------------------------------------------------------------------------
 actionInstall() {
-    system -q -r -- getent passwd 'homeassistant' ||
-       system -f -p -- useradd -rm 'homeassistant' -d "$DAT_HOME" -G dialout,bluetooth
-    attributes -d -m - -o 'homeassistant:staff' -- "$DAT_BASE"
-    embed -r -t -u homeassistant -v -y -z -- \
+    system -q -r -- getent passwd "$CEN_OPT_USER" ||
+       system -f -p -- useradd -rm "$CEN_OPT_USER" -d "$DAT_HOME" -G dialout,bluetooth
+    attributes -d -m - -o "$CEN_OPT_USER:staff" -- "$DAT_BASE"
+    embed -r -t -u "$CEN_OPT_USER" -v -y -z -- \
                    "$CEN_NAME" --version="$CEN_OPT_VERSION" setup install
 }
 
@@ -61,8 +69,8 @@ actionInstall() {
 # install/update Home Assistant core step 2: install|update
 # ------------------------------------------------------------------------------
 actionSetup() {
-    if [ "$USER" != 'homeassistant' ] ; then
-        invoke -e "The current user must be 'homeassistant'" ; return
+    if [ "$USER" != "$CEN_OPT_USER" ] ; then
+        invoke -e "The current user must be '%s'" "$CEN_OPT_USER" ; return
     fi
 
     folder -c -f "$DAT_BASE"
@@ -93,7 +101,7 @@ actionSetup() {
 # ------------------------------------------------------------------------------
 actionRun() {
     local verb ; [ "$CEN_VERB" -gt 1 ] && verb='-v'
-    system -e -u homeassistant -x -- "$DAT_VENV/bin/hass" $verb
+    system -e -u "$CEN_OPT_USER" -x -- "$DAT_VENV/bin/hass" $verb
 }
 
 # ------------------------------------------------------------------------------
@@ -101,7 +109,7 @@ actionRun() {
 # ------------------------------------------------------------------------------
 actionShell() {
     folder -c -f "$DAT_BASE"
-    system -e sudo -u homeassistant -H -s
+    system -e sudo -u "$CEN_OPT_USER" -H -s
 }
 
 # ------------------------------------------------------------------------------
@@ -136,14 +144,14 @@ actionUninst() {
     confirm -n "Uninstall Home Assistant" || return
     remove -d -- bin/ cache/ include/ lib/ share/ pyvenv.cfg LICENSE
     actionAutorun off
-    message -a "Please remove folder '$DAT_VENV' and user 'homeassistant' manually"
+    message -a -p "Please remove folder '%s' and user '%s' manually" "$DAT_VENV" "$CEN_OPT_USER"
 }
 
 # ------------------------------------------------------------------------------
 # upgrade Home Assistant: -no args-
 # ------------------------------------------------------------------------------
 actionUpgrade() {
-    embed -r -t -u homeassistant -v -y -z -- "$CEN_NAME" setup upgrade
+    embed -r -t -u "$CEN_OPT_USER" -v -y -z -- "$CEN_NAME" setup upgrade
 }
 
 # ------------------------------------------------------------------------------
@@ -152,6 +160,8 @@ actionUpgrade() {
 options() {
     case "$1" in
 
+    -U|--use|--user)
+        optarg 'user'       -       -t ;;       # any text
     -V|--vers*)
         optarg 'version'    -       -t ;;       # any text
 
@@ -194,6 +204,7 @@ actions() {
 usage() {
     usageset \
         -o - \
+        -o '-U --user    <user>'  $"specify a different user (default: homeassistant)" \
         -o '-V --version <vers>'  $"homeassistant version (default: $CEN_OPT_VERSION)" \
 
     usageset \
@@ -212,6 +223,7 @@ usage() {
 
     usageset \
         -p '<auto>'               $"one of: on off status" \
+        -p '<user>'               $"linux user name" \
         -p '<vers>'               $"homeassistant version to install" \
 
     usageset \

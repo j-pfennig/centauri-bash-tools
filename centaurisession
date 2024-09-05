@@ -29,6 +29,9 @@ DAT_ENCFS=('Private'   $"Private"   'Privat')
 # folder for issue data
 DAT_ISSUE_DIR="$CEN_ROOT/persistent/issue.d"
 
+DAT_AUTOLOGIN='.centauriautologin'
+DAT_AUTOLEGACY='.autologin'
+
 # ------------------------------------------------------------------------------
 # Helpers for translated folder names
 # ------------------------------------------------------------------------------
@@ -89,12 +92,15 @@ actionAutologin() {
 # Bash login: -no arg-
 # ------------------------------------------------------------------------------
 actionBashrc() {
-    if [ "$XDG_VTNR" = "6" -a -x "$HOME/.autologin" ] ; then
+    local auto="$HOME/$DAT_AUTOLOGIN"
+    [ -e "$auto" ] || auto="$HOME/$DAT_AUTOLEGACY"
+
+    if [ "$XDG_VTNR" = 6 -a -x "$auto" ] ; then
         system -e -- chvt 6
-        system -e -- $HOME/.autologin
+        system -e -x -- "$auto"
         error -s 127 ; return       # used by /etc/bash.centauri: no logout
-    elif ! [ "$HOME/.autologin" -ef "/dev/null" ] ; then
-        embed centauristartx -C0
+    elif ! [ "$auto" -ef '/dev/null' ] ; then
+        embed -x centauristartx -C0
         if [ $? = 127 ] ; then
             error -s 127 ; return   # used by /etc/bash.centauri: no logout
         fi
@@ -113,7 +119,7 @@ actionEncrypt() {
     # check if we have an encfs mounted: <xlat-list>
     ___is_encfs() {
         ___xlat_find emnt -d $1 || return 1    # no mount point
-        findmount "encfs" "$HOME/$emnt" && return 0
+        findmount 'encfs' "$HOME/$emnt" && return 0
         emnt= ; return 1
     }
 
@@ -352,7 +358,7 @@ actionRoaming() {
             done
         fi
         if [ -z "$item" ] ; then
-            message -a $"This user is not roaming" "($mwhy)"
+            trace -a $"This user is not roaming" "($mwhy)"
             return
         fi
     fi
@@ -751,15 +757,16 @@ This happens up to four times to handle the following cases:
 
         (1) any shell calls '$CEN_NAME profile' to sanitize \$TMP and centauriencfs
         (2) A login shell starts '$CEN_NAME login' the initialize the environment
-        (3) A bash shell runs '$CEN_NAME profile', checks ~/.autologin (see below)
+        (3) A bash shell runs '$CEN_NAME profile' and checks autologin (see below)
         (4) At logout bash calls '$CEN_NAME logout' to run 'centauriencfs umount'
 
 The kernel command line argument 'centaurilogin=<user>' will cause case (3) to:
 
-        (3.1) do nothing if ~/.autologin is a symlink to /dev/null
-        (3.2) run centauristartx if ~/.autologin is missing (only for tty >= 3)
-        (3.3) exececute ~/.autologin for all other cases.
+        (3.1) do nothing if ~/$DAT_AUTOLOGIN is a symlink to /dev/null
+        (3.2) run centauristartx if ~/$DAT_AUTOLOGIN is missing (only for tty >= 3)
+        (3.3) exececute ~/$DAT_AUTOLOGIN for all other cases.
 
+For backward compatibility '$DAT_AUTOLEGACY' is an alias of '$DAT_AUTOLOGIN'.
 See 'centaurikiosk --help' for some additional information on autologin.
 !EOF
 }

@@ -3,20 +3,18 @@
 CEN_LEGAL=$"Dr. Jürgen Pfennig (c) 2020-2024; BSD License"
 CEN_TITLE=$"Network mode and GUI selection menu"
 
-PATH+=":${0%/*}" . _centauri_bash_lib  -a -d -t - '0.10:2' 1 || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib  -a -d -t - '0.20:2' 1 || exit 2
 
 # global data
 
 CEN_OPT_HASS=                   # see --hass
 CEN_OPT_KIOSK=                  # see --kiosk
 
-DAT_LOGIN='centaurilogin'
 DAT_TRAP=                       # see trap_handler
 
 # invoke 'menu' action if called via .autologin symlink (see centaurisession)
 if [ "$CEN_NAME" = '.autologin' ] ; then
     CEN_NAME='centauristartup'
-    # bash --noprofile --norc ; exit
     if [ $# = 0 ] ; then
         [ "$USER" = 'kiosk' ] && CEN_OPT_KIOSK=1
         set -- menu
@@ -76,7 +74,7 @@ show_display() {
     }
     DAT_RUN_MODES=()
     ___disp 0 'desktop'     $"show single-user Desktop"
-    ___disp 1 'kiosk' $"enter Kiosk mode"
+    ___disp 1 'kiosk'       $"enter Kiosk mode"
     ___disp 0 'workstation' $"enter Multi-User mode"
     ___disp 0 'maintenance' $"enter Maintenance mode"
     ___disp 0 'network'     $"change Network setup"
@@ -198,21 +196,22 @@ actionDesktop() {
 # Install/uninstall: -no args-
 # ------------------------------------------------------------------------------
 actionInstall() {
+    local want="${CEN_PATHS[2]}/systemd/system/getty.target.wants"
+    remove "$want/centauriautologin"*                   # cleanup to be prudent
+
     if [ "$CEN_ACTION" = 'install' ] ; then
         if [ ! "$CEN_TOOLS/$CEN_NAME" -ef ~local/'.autologin' ] && [ -d ~local ] ; then
             symlink -n -- "$CEN_TOOLS/$CEN_NAME" ~local/'.autologin'
-     #       system -e -p -- systemctl enable  "$CEN_ROOT/systemd/system/centauriautologin@local.service"
         fi
         if [ ! "$CEN_TOOLS/$CEN_NAME" -ef ~kiosk/'.autologin' ] && [ -d ~kiosk ] ; then
             symlink -n -- "$CEN_TOOLS/$CEN_NAME" ~kiosk/'.autologin'
-     #       system -e -p -- systemctl enable  "$CEN_ROOT/systemd/system/centauriautologin@kiosk.service"
         fi
         [ -d ~homeassistant ] &&
                          symlink -n -- "$CEN_TOOLS/$CEN_NAME" ~homeassistant/'.autologin'
+        symlink -n -- "$CEN_ROOT/systemd/system/centauriautologin.service" \
+                      "$want/centauriautologin@.service"
     else
         remove ~local/'.autologin' ~kiosk/'.autologin' ~homeassistant/'.autologin'
-    #    system -q -- systemctl disable  "$CEN_ROOT/systemd/system/centauriautologin@local.service"
-    #    system -q -- systemctl disable  "$CEN_ROOT/systemd/system/centauriautologin@kiosk.service"
     fi
 }
 
@@ -294,8 +293,20 @@ actionMenu() {
 
         while : ; do
             [ -n "$DAT_TRAP" ] && break     # back to network dialog
-            [ "$CEN_OPT_KIOSK" = 1 ] && tout=5
-            if ! show_display mgui "${cgui:-desktop}" "$cgui" $tout ; then
+            if [ "${CEN_OPT_KIOSK:-0}" != 0 ] ;then
+                # using /etc/X11/xinit/xinit.rc to run a script ...
+                create -c -- ".$CEN_NAME" 755 <<!EOF
+#!/usr/bin/bash
+
+# This script gets called from xinitrc:
+#    see /etc/bash.centauri -> centaurisession -> centauristartx
+
+export XDG_CURRENT_DESKTOP=xinit
+exec /admin/centaurilauncher kiosk "http://localhost"
+!EOF
+                do_root 'kiosk' "$USER"
+                show_shutdown ; continue
+            elif ! show_display mgui "${cgui:-desktop}" "$cgui" $tout ; then
                 tout=
                 show_shutdown ; continue
             fi

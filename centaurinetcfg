@@ -216,6 +216,7 @@ do_coca() {
     fi
 
     netfile -h -- "$CEN_NET_FILE_CONF" <<!EOF
+CEN_NET_CONFIG='${CEN_NET_CONFIG:-${domn%%.*}}'
 CEN_NET_DOMAIN='$domn'
 CEN_NET_WIRELESS='$CEN_NET_WIRELESS'
 CEN_NET_PUBLIC='$CEN_NET_PUBLIC'
@@ -390,7 +391,7 @@ do_config() {
             ___error "Host must not specify local domain: $1"
         elif [  "$2" = '+' ] ; then
             DAT_MAP_IP[$1]= ; return
-        elif [ "${DAT_MAP_IP[$1]}" = "=" ] ; then
+        elif [ "${DAT_MAP_IP[$1]}" = '=' ] ; then
             ___error "Reserved host name: $1"
         elif [ -n "${DAT_MAP_IP[$1]}" ] ; then
             ___error "Duplicated host name: $1"
@@ -421,20 +422,26 @@ do_config() {
     }
 
     ___config_allow() {
-        ___arg_min_chk $# 2 "allow" || return 1
+        ___arg_min_chk $# 2 'allow' || return 1
         local what="$1" ; shift
         local curr="${DAT_MAP_ALLOW[$what]} $*"
         DAT_MAP_ALLOW[$what]="${curr# }"
         ___message "%-10s %s %s" 'allow' "$what" "$*"
     }
 
+    ___config_config() {
+        ___arg_rng_chk $# 1 1 'config' || return 1
+        CEN_NET_CONFIG="$1"
+        ___message "%-10s %s" 'config' "$1"
+    }
+
     ___config_fake() {
-        ___arg_rng_chk $# 1 1 "fake" || return 1
+        ___arg_rng_chk $# 1 1 'fake' || return 1
         CEN_NET_FAKES+=("$@")
     }
 
     ___config_filter() {
-        ___arg_min_chk $# 2 "filter" || return 1
+        ___arg_min_chk $# 2 'filter' || return 1
         local addr what="$1" ; shift
 
    # TODO backward compatibility
@@ -484,10 +491,20 @@ do_config() {
         ___message "%-10s %s %s %s" 'homedns' "$1" "$2" "${3:-$2}"
     }
 
+    # statement: host <mac>|-|+ <addr>|+|- <name> [<alias>]...
     ___config_host() {
-        ___arg_min_chk $# 3 "host" || return 1
+        ___arg_min_chk $# 3 'host' || return 1
         local maca="$1" ; shift
         local ip4a="$1" ; shift
+        local name="$1"
+
+        if [ "$maca" = '+' ] ; then             # allow duplicated host entry
+            if [ -n "${DAT_MAP_IP[$name]}" ] ; then
+                ___message "%-10s %-18s %-18s %s   # ignored " 'host' "$maca" "$ip4a" "$name"
+                return
+            fi
+            maca='-'
+        fi
 
         if [ "$ip4a" = '+' ] ; then
             ip4a="${_netparse_addr##*.}" ; ((ip4a += 1))
@@ -497,10 +514,9 @@ do_config() {
             ___arg_address "$ip4a" ; ip4a="$_netparse_addr"
         fi
 
-        local name="$1"
         if [ "$name" = "$CEN_NET_SERVER_GEN" ] ; then
             ___mapname "$name" +                    # unlock
-            [ "$#" = 1 ] || ___error "Generic server name cannot be aliased"
+            [ $# = 1 ] || ___error "Generic server name cannot be aliased"
         fi
 
         for name in "$@" ; do                       # loop over list of names...
@@ -631,7 +647,7 @@ do_config() {
         case "$keyw" in
             '#'*|"")    continue ;;
             allow)      ___config_allow   "$@" ;;
-            dhcp)       warning "dhcp statement is obsolete" ;;
+            config)     ___config_config  "$@" ;;
             fake)       ___config_fake    "$@" ;;
             filter)     ___config_filter  "$@" ;;
             homedns)    ___config_homedns "$@" ;;
@@ -752,18 +768,18 @@ do_link() {
     [ "$CEN_OPT_OUTPUT" = '-' ] && return
 
     local nscd
-    if [ "$1" = "-f" ] ; then
+    if [ "$1" = '-f' ] ; then
         nscd=1 ; shift
     fi
 
-    local base="/etc/hosts"
+    local base='/etc/hosts'
     [ -n "$CEN_OPT_OUTPUT" -a "$CEN_OPT_OUTPUT" != '.' ] &&
         base="$CEN_OPT_OUTPUT/hosts"
 
-    if netlink -m -k "$base" "_" "$1" ; then
+    if netlink -m -k "$base" '_' "$1" ; then
         [ -n "$_netlink" ] && message "Hosts config switched to: $1"
     elif [ -z "$CEN_OPT_KEEP" ] ; then
-        netlink -m -k "$base" "_" 'local'
+        netlink -m -k "$base" '_' 'local'
         warning "Hosts config switched to: local ('$1' not found)"
     fi
 
@@ -784,7 +800,7 @@ do_hosts() {
     netoption 'ipv6' "$host" || nov6='#'
 
     local lnam                                  # to insert separator lines
-    local smas="master" sslv="slave"
+    local smas='master' sslv='slave'
 
     # write a host entry: <ip> <name>...
     ___hosts_writer() {
@@ -834,7 +850,7 @@ do_hosts() {
         local serv="$2"
         local addr maca defr defs defm
 
-        if [ "$what" = "servers" ] ; then
+        if [ "$what" = 'servers' ] ; then
             # fake line for 'local' mode
             if [ "$serv" = 'local' -a -n "$CEN_NET_SERVER_GEN" ] ; then
                 echo
@@ -853,7 +869,7 @@ do_hosts() {
             addr="$1" ; shift                               # ip4 addr
 
             if is_server "$1" ; then                        # select by group ...
-                [ "$what" = "servers" ] || continue
+                [ "$what" = 'servers' ] || continue
                 [ "$1" = "$serv" ] && defs="$CEN_NET_SERVER_GEN"
                 if [ "$serv" != 'local' ] ; then
                     [ "$1" = "$serv" ] && defm="$smas" || defm="$sslv"
@@ -1336,7 +1352,7 @@ ${ipv4}net.ipv6.conf.default.disable_ipv6 = 1
 $host
 !EOF
 
-    netfile <<!EOF "/etc/mailname"
+    netfile <<!EOF '/etc/mailname'
 $host.$domn
 !EOF
 
@@ -1353,8 +1369,8 @@ $host.$domn
 
     if [ -z "$CEN_OPT_OUTPUT" ] ; then                  # real setup
         # migrate, fix things ...
-        netlink -m -k '/etc/hosts' '_'
-        [ -e "/etc/nsswitch.local" ] && netlink -m -k "/etc/nsswitch.conf"
+        netlink -m -k -s '/etc/hosts' '_'
+        [ -e '/etc/nsswitch.local' ] && netlink -m -k '/etc/nsswitch.conf'
 
         message "Full setup: server='$CFG_SERVER_DEF'  router='$CEN_NET_ROUTER_DEF'  hostname='$host'"
         embed -v 'centaurinetgen' -H "$host" create     # interfaces, wpa, hostapd, dnsmasq.d
@@ -1466,10 +1482,11 @@ actionGateway() {
 }
 
 # ------------------------------------------------------------------------------
-# action "option" - list options: [<host>}
+# action "option" - list options: [<host>|-]
 # ------------------------------------------------------------------------------
 actionOptions() {
-    local host="${1:-$HOSTNAME}" opts name desc list=()
+    local host="${1:--}" opts name desc list=()
+    [ "$host" = '-' ] && host="$HOSTNAME"
     netconfig -f                                    # cannot run without config
     for opts in "${CEN_NET_OPTIONS[@]}" ; do        # loop over options
         name="${opts%% *}"
@@ -1732,13 +1749,13 @@ actionSwitch() {
 
     # switch nss name services (not using sssd)
     local nscd ; _netlink=
-    if [ -e "/etc/nsswitch.local" ] ; then
+    if [ -e '/etc/nsswitch.local' ] ; then
         if [ "$snam" = 'local' ] ; then
-            netlink -k -m "/etc/nsswitch.conf" '.' 'local' "$CEN_NAME"
+            netlink -k -m '/etc/nsswitch.conf' '.' 'local' "$CEN_NAME"
         elif [ -z "$CEN_OPT_KEEP" ] ; then
-            netlink -k -m "/etc/nsswitch.conf" '.' "$snam" 'client'
+            netlink -k -m '/etc/nsswitch.conf' '.' "$snam" 'client'
         else
-            netlink -k -m "/etc/nsswitch.conf" '.' "$snam"
+            netlink -k -m '/etc/nsswitch.conf' '.' "$snam"
         fi
         [ $? = 0 -a -n "$_netlink" ] && nscd="-f"
         [ -n "$nscd" ] && message "nsswitch.conf switched to: $_netlink_suff"
@@ -1863,6 +1880,7 @@ actions:
        edit                 edit configuration, run 'validate' and 'setup'
        gateway [<gateway>|-°[<iface>]]]
                             set/remove the default gateway
+       options [<host>]     show configuration options
        resolv  [<fqdn>] default|none|any|<iface> [<dns>...]
                             update dnsmasq dns server config, restart dnsmasq
        setup   [<hostname>] create config files, full setup with <hostname>
