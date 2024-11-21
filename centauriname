@@ -95,7 +95,7 @@ do_iplist() {
 
 do_method() {
     get_config
-    echo "${CEN_NET_ADDR_METHOD:-manual}"
+    echo "${CEN_NET_ADDR_METHOD:-<unknown>}"
 }
 
 do_stat() {

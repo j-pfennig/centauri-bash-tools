@@ -4,19 +4,54 @@ CEN_LEGAL="Dr. Jürgen Pfennig (c) 2021-2024; BSD License"
 CEN_TITLE=$"Handle differences between text files"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -i -r -y - '0.03:2' 2 2 || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -i -r -s -y - '0.05:3' 2 2 || exit 2
 
 # Data
 CEN_OPT_ACCEPT=             # see --accept
 CEN_OPT_CHANGE=             # see --change
-CEN_OPT_DIFFERENCE=         # see --difference
 CEN_OPT_EDIT=               # see --edit
 CEN_OPT_FIX=                # see --fix
 CEN_OPT_MERGE=              # see --merge
 CEN_OPT_KOMPARE=            # see --kompare
 CEN_OPT_PROMPT=             # see --prompt
 CEN_OPT_REVERT=             # see --revert
+CEN_OPT_ROOT=               # see --root
 CEN_OPT_SHELL=              # see --shell
+CEN_OPT_TIME=               # see --time
+
+# ------------------------------------------------------------------------------
+# Compare two files: -s|-v <fscr> <fdes>
+# ------------------------------------------------------------------------------
+do_compare() {
+    local   fsrc="$2" fdes="$3" mesg='message -a -c' temp
+    [ "$2" = '-s' ] && message='trace -a -c'
+
+    if [ ! -f "$fdes" ] ; then
+        $mesg $"Source only" "${fsrc#$PWD/}"
+        return 2
+    fi
+
+    if [ "$fsrc" -nt "$fdes" ] ; then
+        temp=$"Source is newer"
+    elif [ "$fdes" -nt "$fsrc" ] ; then
+        temp=$"Source is older"
+    elif [ -n "$CEN_OPT_TIME" ] ; then
+        [ -z "$CEN_OPT_SILENT" ] && $mesg $"Same timestamp" "${fsrc#$PWD/}"
+        return 1
+    fi
+
+    if system -r -q -- cmp --quiet "$fsrc" "$fdes" ; then
+        [ -n "$CEN_OPT_SILENT" ] && return 0
+        if [ -n "$temp" ] ; then
+            $mesg "$temp" "${fsrc#$PWD/}"
+        else
+            message -c -a $"Files are equal" "${fsrc#$PWD/}"
+        fi
+        return 0
+    fi
+    $mesg $"Content differs" "${fsrc#$PWD/}"
+    return 1
+}
 
 # ------------------------------------------------------------------------------
 # Find file in distro repository: <vnam> <path>
@@ -287,11 +322,30 @@ run_files() {
 # merge folders
 # ------------------------------------------------------------------------------
 run_folders() {
+    local -A ddic
+
+    ___dest_equal() {
+        local item="${2#$dest}" ides="${2#$dest}"
+        [ -n "$chgf" ] && ides="${item//$chgf/$chgt}"
+        if [ ! -d "$orig/$ides" ] ; then
+            message -a -c "No origin" "$ides"
+            return 2
+        elif [ "$item" -ef "$orig/$ides" ] ; then
+            trace -a -c "Skip folder" "$item"
+            return 2
+        fi
+        return 0
+    }
+
+    ___dest_dict() {
+        ddic["${1#$dest/}"]=0
+    }
+
     ___skip_equal() {
         local item="${2#./}" ides="${2#./}"
         [ -n "$chgf" ] && ides="${item//$chgf/$chgt}"
         if [ ! -d "$dest/$ides" ] ; then
-            message -c "No destination" "$ides"
+            message -a -c "No destination" "$ides"
             return 2
         elif [ "$item" -ef "$dest/$ides" ] ; then
             trace -a -c "Skip folder" "$item"
@@ -303,30 +357,29 @@ run_folders() {
     local orig dest item ides chgf chgt
     [ -n "$CEN_OPT_CHANGE" ] && splitkeyval "$CEN_OPT_CHANGE" chgf chgt '/'
     resolve -e -m -s dest -- "$2" || return 1
-    folder -c "$1" || return 1
-    walk -i -r -d ___skip_equal '.' || return 1
+    folder -c -- "$1" || return 1
     orig="$PWD"
+
+    walk -i -n -r -d ___dest_equal -f ___dest_dict -- "$dest" || return 1
+    trace -a -p "Found %s destination files" "${#ddic[@]}"
+
+    walk -i -n -r -d ___skip_equal '.' || return 1
     trace -a -p "Found %s source files" "${#CEN_WALK_FILES[@]}"
+    CEN_AUTOIND=
+
     for item in "${CEN_WALK_FILES[@]}" ; do
         item="${item:2}" ; ides="$item"
         [ -n "$chgf" ] && ides="${item//$chgf/$chgt}"
-        if [ ! -f "$dest/$item" ] ; then
-            message -c "Source only" "$item ($ides)"
-        # TODO 'fast mode' to run 'cmp' only if time differs?
-        elif system -q -r cmp "$orig/$item" "$dest/$ides" ; then
-            $CEN_TRACE2 -a -c "Data is equal" "$item"
-            if [ "$orig/$item" -nt "$dest/$ides" ] ; then
-                message -c "Source is newer" "$item"
-            elif [ "$dest/$ides" -nt "$orig/$item" ] ; then
-                message -c "Source is older" "$item"
-            else
-                continue
-            fi
-        else
-            message -c "Data differs" "$item"
-        fi
+        ddic["$ides"]=1
+        do_compare -v "$orig/$item" "$dest/$ides" && continue
         [ "$CEN_YESNO" = 'n' ] && continue
-        run_merge "$orig/$item" "$dest/$ides" || break
+        run_merge "$orig/$item" "$dest/$ides" || return
+    done
+
+    CEN_AUTOIND=
+    for item in "${!ddic[@]}" ; do
+        [ "${ddic[$item]}" = 1 ] && continue
+        message -a -c "Destination only" "$item"
     done
 }
 
@@ -381,7 +434,7 @@ run() {
     # using folders?
     if   [ -d "$fdes" ] ; then
         if [ -d "$fsrc" ] ; then
-            do_badopts 'ACCEPT' 'DIFFERENCE' 'EDIT' 'FIX' 'KOMPARE' 'PROMPT' 'REVERT' 'SHELL'
+            do_badopts 'ACCEPT' 'EDIT' 'FIX' 'KOMPARE' 'PROMPT' 'REVERT' 'SHELL'
             error -t || return
             if [ -n "$CEN_OPT_MERGE" ] ; then
                 run_folders "$fsrc" "$fdes"
@@ -396,13 +449,12 @@ run() {
     fi
 
     do_badopts 'CHANGE' ; error -t || return
-    if system -r -q -- cmp --quiet "$fsrc" "$fdes" ; then
-        [ -z "$difference" ] && message -a "Files are equal"
+    if do_compare -s "$fsrc" "$fdes" ; then
         [ -z "$CEN_OPT_PROMPT" -a -z "$CEN_OPT_SHELL" ] && return
     fi
 
-    do_check fsrc "$fsrc" "Left  side" || ((ferr |= 1))
-    do_check fdes "$fdes" "Right side" || ((ferr |= 2))
+    do_check fsrc "$fsrc" $"Left  side" || ((ferr |= 1))
+    do_check fdes "$fdes" $"Right side" || ((ferr |= 2))
 
     if [ -n "$CEN_OPT_ACCEPT" ] ; then
         [ "$ferr" = 2 -a ! -e "$fdes" ] && ferr=
@@ -450,32 +502,34 @@ options() {
     case "$1" in
 
     '')     local opts="$CEN_OPT_ACCEPT$CEN_OPT_REVERT"
-            optarg "$opts" - -m "--accept --revert"
+            optarg "$opts" - -m '--accept --revert'
             opts+="$CEN_OPT_EDIT$CEN_OPT_KOMPARE$CEN_OPTMERGE$CEN_OPT_PROMPT$CEN_OPT_SHELL"
-            optarg "$opts" - -m "--edit --kompare --merge --prompt --shell --accept --revert"
-            [ -n "$CEN_OPT_FIX" ] && context -r
+            optarg "$opts" - -m '--edit --kompare --merge --prompt --shell --accept --revert'
+            [ -n "$CEN_OPT_FIX" -o -n "$CEN_OPT_ROOT" ] && context -s
             CEN_HISTORY='-' ;;
 
     -A|--acc*)
-        optarg "accept"     -   ;;   # simple flag
+        optarg 'accept'     -       ;;   # simple flag
     -C|--cha*)
-        optarg 'change'     - -t ;;  # any text
-    -D|--dif*)
-        optarg "difference" -   ;;   # simple flag
+        optarg 'change'     - -t    ;;  # any text
     -E|--edi|--edit)
-        optarg "edit"       - "l|lef|left|r|rig|righ|right|b|bot|both|-" ;;
+        optarg 'edit'       - 'l|lef|left|r|rig|righ|right|b|bot|both|-' ;;
     -F|--fix)
-        optarg "fix"        -   ;;   # simple flag
+        optarg 'fix'        -       ;;   # simple flag
     -K|--kom*)
-        optarg "kompare"    -   ;;   # simple flag
+        optarg 'kompare'    -       ;;   # simple flag
     -M|--mer*)
-        optarg "merge"      -   ;;   # simple flag
+        optarg 'merge'      -       ;;   # simple flag
     -P|--pro*)
-        optarg "prompt"     -   ;;   # simple flag
+        optarg 'prompt'     -       ;;   # simple flag
     -R|--rev*)
-        optarg "revert"     -   ;;   # simple flag
+        optarg 'revert'     -       ;;   # simple flag
     -S|--she*)
-        optarg "shell"      -   ;;   # simple flag
+        optarg 'shell'      -       ;;   # simple flag
+    -T|--tim|--time)
+        optarg 'time'       -       ;;   # simple flag
+    -U|--roo|--root)
+        optarg 'root'       -       ;;   # simple flag
 
     esac
 }
@@ -486,18 +540,19 @@ options() {
 usage() {
 
     usageset \
-        -u "(1) $CEN_NAME <opt>... [-E|-K|-M|-P|-S] [-A|-D|-R] [-F] <arg1> <arg2>" \
-        -u "(2) $CEN_NAME <opt>... [-M] <dir1> <dir2>" \
+        -u "(1) $CEN_NAME <opt>... [-E|-K|-M|-P|-S] [-A|-R|-T] [-F] <arg1> <arg2>" \
+        -u "(2) $CEN_NAME <opt>... [-M] [-T] <dir1> <dir2>" \
         -u - \
         -u "$CEN_TITLE. Form (1) works for single files," \
         -u "whereas form (2) operates recursively on folders." \
         -o - \
         -o '-A --accept'         $"accept changes" \
-        -o '-D --difference'     $"do nothing if files are equal" \
         -o '-R --revert'         $"revert changes" \
+        -o '-T --time'           $"treat pair with same timestamp as equal" \
         -o - \
         -o '-C --change  <expr>' $"fix ownership, mode and timestamp" \
         -o '-F --fix'            $"fix ownership, mode and timestamp" \
+        -o '-U --root'           $"run as root user" \
         -o - \
         -o '-E --edit    <what>' $"[*] edit left|right|both files" \
         -o '-K --kompare'        $"[*] run 'kompare' gui tool" \
@@ -510,8 +565,9 @@ usage() {
         -p '<argN>'   '         '$"folder, file or @<dist> (repository argument)" \
         -p '<dirN>'   '         '$"folder or @<dist>       (repository argument)" \
         -p '<expr>'   '         '$"path string change expression: <from>/<to>" \
-        -p '<what>'    '         '$"one of ..." \
+        -p '<what>'   '         '$"one of ..." \
 
+    local tlnk="${CEN_INSTALL#*:*:}" ; tlnk="${tlnk%%:*}"
     usageset \
         -e '°                    '$"# run diff tool (default) ..." \
         -e ". somefile otherfile" \
@@ -522,8 +578,8 @@ usage() {
         -e '°                    '$"# merge dialog (centauriconfig)..." \
         -e ". --merge somefile otherfile" \
         -e '°                    '$"# repository argument ..." \
-        -e ". /admin/$CEN_NAME @bullseye" \
-        -e ". --edit @eye /admin/$CEN_NAME"
+        -e ". $tlnk/$CEN_NAME @bullseye" \
+        -e ". --edit @eye $tlnk/$CEN_NAME"
 }
 
 # ------------------------------------------------------------------------------

@@ -82,6 +82,7 @@ do_pack() {
     *.tgz|*.gz)     want='gzip' ; [ "$pack" = "pigz" ] && want="$pack" ;;
     *.xz|*.lzma)    want='xz'    ;;
     *.lzop|*.lzo)   want='lzop'  ;;
+    *.zstd)         want='zstd'  ;;
     *.%X)           [ -z "$pack" ] && want='gzip' ;;    # auto generated ext
     esac
 
@@ -133,8 +134,13 @@ do_pack() {
         _pack_run="xz -T0"
         _pack_ext=".xz"
         ;;
+    zstd)
+        _pack_tar="-I 'zstd -T0'"
+        _pack_run="zstd -T0"
+        _pack_ext=".zstd"
+        ;;
     *)
-        error "Supported packers are: none|bzip2|gzip|lzma|lzop|pigz|xz (got: '$pack')"
+        error "Supported packers are: none|bzip2|gzip|lzma|lzop|pigz|xz|zstd (got: '$pack')"
         ;;
     esac
 }
@@ -1031,7 +1037,7 @@ arguments:
                                %D := <date>   %H := <host>        %% := %
                                %T := <tag>    %X := <extension>   %Z := %H_%T_%D
        <meth>               must be "tar"
-       <tool>               one of these packer tools: none bzip2 gzip lzop xz
+       <tool>               one of these packer tools: none bzip2 gzip lzop xz zstd
 
 examples:
        $CEN_NAME disk                                  # backup a target
