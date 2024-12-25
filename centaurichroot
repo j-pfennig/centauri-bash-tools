@@ -3,7 +3,7 @@
 CEN_LEGAL="Dr. Jürgen Pfennig (c) 2020-2024; BSD License"
 CEN_TITLE="Run a program or shell in a chroot environment"
 
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m ext -y - '0.08:1' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m ext -y - '0.09:1' || exit 2
 # don't use win (which would pull-in ext, ins and sys) in package to save space
 [ -z "$CEN_PACKAGE" ] && embed -m _centauri_bash_win
 
@@ -108,10 +108,10 @@ actionChroot() {
     if error -t ; then
         message -d - "Running chroot ..."
         if [ "$CEN_ACTION" = 'login' ] ; then
-            local aarg=("${CEN_OPT_ENVVAR[@]}" /bin/bash -l)
+            local aarg=("${CEN_OPT_ENVVAR[@]}" /usr/bin/bash -l)
             do_chroot -k runuser "$cusr" -c "/usr/bin/env ${aarg[*]}"
         elif [ "$CEN_ACTION" = 'shell' ] ; then
-            do_chroot env "${CEN_OPT_ENVVAR[@]}" /bin/bash -i
+            do_chroot env "${CEN_OPT_ENVVAR[@]}" /usr/bin/bash -i
         else
             local envv
             [ -n "$CEN_OPT_ENVVAR" ] && envv="${CEN_OPT_ENVVAR[*]} "

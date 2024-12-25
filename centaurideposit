@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/bash
 # ------------------------------------------------------------------------------
 CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2016-2024; BSD License"
 CEN_TITLE="Backup Btrfs Volumes to Archive Disk using 'centauricopy'"
@@ -148,11 +148,16 @@ destination() {
     DAT_DESTINATION= ; DAT_STATUSDIR=
     [ "$1" = '-v' ] || sdir="/.$CEN_NAME"
     [ -d "$CEN_MOUNT_DIR/Volumes" ] && vols='Volumes/'
-    for dest in 'Computers' 'Backup' 'Data' ${sdir:+.} '' ; do
+    for dest in 'Computers' 'Backup' 'Data' 'Shared' ${sdir:+.} '' ; do
         [ -z "$dest" ] && break
         dest="$CEN_MOUNT_DIR/$vols$dest$sdir"
         dest="${dest/\/.\//\/}"
         [ -d "$dest" ] && break
+        if [ -n "$sdir" ] ; then                            # backward compat
+            dest="${dest%/*}/.centaurimirror"
+           # dest="${dest/\/.\//\/}"
+            [ -d "$dest" ] && break
+        fi
     done
 
     if [ "$1" = '-v' ] ; then
