@@ -3,13 +3,14 @@
 CEN_LEGAL="Dr. Jürgen Pfennig (c) 2020-2024; BSD License"
 CEN_TITLE="Run a program or shell in a chroot environment"
 
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m ext -y - '0.09:1' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m ext -y - '0.10:4' || exit 2
 # don't use win (which would pull-in ext, ins and sys) in package to save space
 [ -z "$CEN_PACKAGE" ] && embed -m _centauri_bash_win
 
 # Data
 
 CEN_OPT_BASE=                   # see --base
+CEN_OPT_DPI=                    # see --dpi
 CEN_OPT_ENVVAR=()               # see --envvar
 CEN_OPT_MOUNTS=                 # see --mounts
 CEN_OPT_NICK=                   # see --nick
@@ -39,7 +40,16 @@ do_chroot() {
         LC_ALL=C
     fi
     export TMP='/tmp' TMPDIR='/tmp'
-    chroot "$CEN_OPT_BASE" "$@"
+
+    local xres='/etc/X11/Xresources/centauridisplay'
+    if [ -n "$CEN_OPT_DPI" ] && [ -r "$xres" ] ; then
+        system -f -p -- xrdb <<<"Xft.dpi $CEN_OPT_DPI"
+        chroot "$CEN_OPT_BASE" "$@" & sleep 3
+        syspipe -o "grep -v Xft\.dpi $xres" -d 'xrdb'
+        wait
+    else
+        chroot "$CEN_OPT_BASE" "$@"
+    fi
 }
 
 do_setup() {
@@ -376,6 +386,8 @@ options() {
 
     -B|--bas|--base)
         optarg "base"   -            -t    ;;   # folder
+    -D|--dpi)
+        optarg 'dpi'    -            -n    ;;
     -E|--env*)
         optarg "envvar" []           -t    ;;   # array
     -M|--mou*)

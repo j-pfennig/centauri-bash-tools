@@ -1,10 +1,10 @@
 #!/usr/bin/bash
 # ------------------------------------------------------------------------------
-CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2013-2024; BSD License"
+CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2013-2025; BSD License"
 CEN_TITLE="Manage network configuration files, resolv.conf and routing"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a - '0.61:4' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a - '0.62:4' || exit 2
 
 # Import the net library, don't read config
 embed -m _centauri_bash_net -n
@@ -258,8 +258,6 @@ do_config() {
         if [ -z "$indx" ] ; then
             emsg="Invalid network name:"
         else
-#            [ "$indx" = 0 -o "$indx" = 7 ] && aopt='-a'
-#            netmask $aopt -- "$addr"            # also sets _netparse_addr amd bits
             netmask -- "$addr"                  # also sets _netparse_addr amd bits
             case $? in
             0)  netconv -d -- "$_netmask_mask"  # need to convert to dec -> dotted
@@ -441,14 +439,6 @@ do_config() {
         local ip4a="$1" ; shift
         local name="$1"
 
-        if [ "$maca" = '+' ] ; then             # allow duplicated host entry
-            if [ -n "${DAT_MAP_IP[$name]}" ] ; then
-                ___message "%-10s %-18s %-18s %s   # ignored " 'host' "$maca" "$ip4a" "$name"
-                return
-            fi
-            maca='-'
-        fi
-
         if [ "$ip4a" = '+' ] ; then
             ip4a="${_netparse_addr##*.}" ; ((ip4a += 1))
             ip4a="${_netparse_addr%.*}.$ip4a"
@@ -460,6 +450,15 @@ do_config() {
         if [ "$name" = "$CEN_NET_SERVER_GEN" ] ; then
             ___mapname "$name" +                    # unlock
             [ $# = 1 ] || ___error "Generic server name cannot be aliased"
+            maca='-'
+        fi
+
+        if [ "$maca" = '+' ] ; then             # allow duplicated host entry
+            if [ -n "${DAT_MAP_IP[$name]}" ] || [ -n "${DAT_MAP_NAME[$ip4a]}" ] ; then
+                ___message "%-10s %-18s %-18s %s   # ignored " 'host' "$maca" "$ip4a" "$name"
+                return
+            fi
+            maca='-'
         fi
 
         for name in "$@" ; do                       # loop over list of names...
@@ -1407,22 +1406,21 @@ actionEdit() {
 # centaurisysinit def <delay>
 # centauristartup vterm
 # hotplug: usb0 -> eth0 !!!! end0|eth0 -> eth1
-    local errs
-    copy -a -f -- "$CEN_OPT_CONFIG" "$CEN_OPT_CONFIG.bak"
+    local errs cbak="$CEN_OPT_CONFIG.bak"
+    copy -a -f -- "$CEN_OPT_CONFIG" "$cbak"
     while : ; do
         system -e -- editor "$CEN_OPT_CONFIG" || return
-        if system -e -p -g 1 -- cmp "$CEN_OPT_CONFIG" "$CEN_OPT_CONFIG.bak" ; then
+        if [ -z "$errs" ] && system -e -p -g 1 -- cmp "$CEN_OPT_CONFIG" "$cbak" ; then
             message "No changes made, no action taken"
             remove -- "$CEN_OPT_CONFIG.bak" ; return
         fi
-        actionValidate nocache
-        if error -t ; then
+        if embed "$CEN_NAME" validate nocache ; then
             actionSetup -
             error -t && return                      # no errors, done!
             errs=1                                  # need setup after undo
         fi
         confirm -n "Undo changes and quit" && break # exit edit loop
-        error -c
+        error -c ; errs=1
     done
     move -f "$CEN_OPT_CONFIG.bak" "$CEN_OPT_CONFIG"
     error -c

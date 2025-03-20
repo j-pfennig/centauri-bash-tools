@@ -154,7 +154,8 @@ destination() {
         dest="${dest/\/.\//\/}"
         [ -d "$dest" ] && break
         if [ -n "$sdir" ] ; then                            # backward compat
-            dest="${dest%/*}/.centaurimirror"
+            dest="${dest%/*}/.$CEN_NAME"
+           # dest="${dest%/*}/.centaurimirror"
            # dest="${dest/\/.\//\/}"
             [ -d "$dest" ] && break
         fi
