@@ -955,8 +955,9 @@ options() {
         if [ -n "$CEN_OPT_STORAGE" ] ; then
             DAT_REMOTE="${CEN_OPT_STORAGE%%:*}"
             if [ "$DAT_REMOTE" = "$CEN_OPT_STORAGE" ] ; then
-                DAT_REMOTE=
                 embed -r -s CEN_OPT_STORAGE centauripaths -L -F "$CEN_OPT_STORAGE"
+                [ -z "$CEN_OPT_STORAGE" ] && CEN_OPT_STORAGE="$DAT_REMOTE"
+                DAT_REMOTE=
             else
                 CEN_OPT_STORAGE="${CEN_OPT_STORAGE#*:}"
                 embed -r -s CEN_OPT_STORAGE -- centaurissh --host "$DAT_REMOTE" batch --- \

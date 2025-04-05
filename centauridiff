@@ -1,10 +1,10 @@
 #!/usr/bin/bash
 # ------------------------------------------------------------------------------
-CEN_LEGAL="Dr. Jürgen Pfennig (c) 2021-2024; BSD License"
+CEN_LEGAL="Dr. Jürgen Pfennig (c) 2021-2025; BSD License"
 CEN_TITLE=$"Handle differences between text files"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -i -r -s -y - '0.05:3' 2 2 || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -i -r -s -y - '0.06:3' 2 2 || exit 2
 
 # Data
 CEN_OPT_ACCEPT=             # see --accept
@@ -13,6 +13,7 @@ CEN_OPT_EDIT=               # see --edit
 CEN_OPT_FIX=                # see --fix
 CEN_OPT_MERGE=              # see --merge
 CEN_OPT_KOMPARE=            # see --kompare
+CEN_OPT_NOADD=              # see --noadd
 CEN_OPT_PROMPT=             # see --prompt
 CEN_OPT_REVERT=             # see --revert
 CEN_OPT_ROOT=               # see --root
@@ -27,6 +28,7 @@ do_compare() {
     [ "$2" = '-s' ] && message='trace -a -c'
 
     if [ ! -f "$fdes" ] ; then
+        [ -n "$CEN_OPT_NOADD" ] && return 0
         $mesg $"Source only" "${fsrc#$PWD/}"
         return 2
     fi
@@ -193,7 +195,7 @@ run_kompare() {
 }
 
 # ------------------------------------------------------------------------------
-#
+# Merge command query: <src>|- <dest>
 # ------------------------------------------------------------------------------
 run_merge() {
     local ahlp=("ignore  -  do nothing" '\n'
@@ -201,8 +203,13 @@ run_merge() {
                 "quit    -  termiate the program" '\n'
                 "shell   -  run the 'bash' shell")
     local vcmd='ignore help quit shell' flef frig
-    [ -f "$1" ] && flef=1
-    [ -f "$2" ] && frig=1
+    if [ "$1" = '-' ] ; then
+        vcmd+=' delete'
+        ahlp+=('\n' "delete  -  remove the right file")
+    else
+        [ -f "$1" ] && flef=1
+        [ -f "$2" ] && frig=1
+    fi
 
     if [ -n "$flef" ] && [ -n "$frig" -o ! -e "$2" ] ; then
         vcmd+=' accept'
@@ -225,6 +232,7 @@ run_merge() {
             quit)   error -s 4 ; return 1 ;;
             shell)  run_shell "$1" "$2" ;;
             accept) run_replace -a "$1" "$2" ; break ;;
+            delete) remove -- "$2" ; break ;;
             revert) run_replace -r "$1" "$2" ; break ;;
             diff)   run_diff "$1" "$2" ;;
             komp*)  run_kompare "$1" "$2" ;;
@@ -328,6 +336,7 @@ run_folders() {
         local item="${2#$dest}" ides="${2#$dest}"
         [ -n "$chgf" ] && ides="${item//$chgf/$chgt}"
         if [ ! -d "$orig/$ides" ] ; then
+            [ -n "$CEN_OPT_NOADD" ] && return 0
             message -a -c "No origin" "$ides"
             return 2
         elif [ "$item" -ef "$orig/$ides" ] ; then
@@ -345,7 +354,8 @@ run_folders() {
         local item="${2#./}" ides="${2#./}"
         [ -n "$chgf" ] && ides="${item//$chgf/$chgt}"
         if [ ! -d "$dest/$ides" ] ; then
-            message -a -c "No destination" "$ides"
+           [ -n "$CEN_OPT_NOADD" ] && return 0
+           message -a -c "No destination" "$ides"
             return 2
         elif [ "$item" -ef "$dest/$ides" ] ; then
             trace -a -c "Skip folder" "$item"
@@ -377,10 +387,15 @@ run_folders() {
     done
 
     CEN_AUTOIND=
-    for item in "${!ddic[@]}" ; do
-        [ "${ddic[$item]}" = 1 ] && continue
-        message -a -c "Destination only" "$item"
-    done
+    [ -z "$CEN_OPT_NOADD" ] &&
+        for item in "${!ddic[@]}" ; do
+            [ "${ddic[$item]}" = 1 ] && continue
+            message -a -c "Destination only" "$item"
+            [ "$CEN_YESNO" = 'n' ] && continue
+            ides="$item"
+            [ -n "$chgf" ] && ides="${item//$chgf/$chgt}"
+            run_merge '-' "$dest/$ides" || return
+        done
 }
 
 # ------------------------------------------------------------------------------
@@ -520,6 +535,8 @@ options() {
         optarg 'kompare'    -       ;;   # simple flag
     -M|--mer*)
         optarg 'merge'      -       ;;   # simple flag
+    -N|--noa*)
+        optarg 'noadd'      -       ;;   # simple flag
     -P|--pro*)
         optarg 'prompt'     -       ;;   # simple flag
     -R|--rev*)
@@ -552,6 +569,7 @@ usage() {
         -o - \
         -o '-C --change  <expr>' $"fix ownership, mode and timestamp" \
         -o '-F --fix'            $"fix ownership, mode and timestamp" \
+        -o '-N --noadd'          $"ignore source/destination only" \
         -o '-U --root'           $"run as root user" \
         -o - \
         -o '-E --edit    <what>' $"[*] edit left|right|both files" \

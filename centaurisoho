@@ -427,7 +427,7 @@ get_address() {
 # ------------------------------------------------------------------------------
 # get host architecture
 # ------------------------------------------------------------------------------
-#   SOHO_PLATFORM   x86 (pc)    rpi (raspi)     r32 (raspi2)
+#   SOHO_PLATFORM   x86/arm (pc)    rpi (raspi)     r32 (raspi2)
 # ------------------------------------------------------------------------------
 get_architecture() {
     [ -n "$DAT_SOHO_ARCH" ] && return 0
@@ -437,6 +437,7 @@ get_architecture() {
     case "$SOHO_PLATFORM-$DAT_SOHO_ARCH" in
         *-)         quit -f $"Not running a debian system?" ;;
         -amd64)     SOHO_PLATFORM='x86' ;;
+        -arm64)     SOHO_PLATFORM='arm' ;;
         rpi-arm64)  DAT_RASPI=2 ;;
         rpi-arm*)   SOHO_PLATFORM='r32' ;;
         *)          error $"Unsupported hardware architecture:" "$DAT_SOHO_ARCH"
@@ -775,7 +776,6 @@ run_installer() {
     [ -x './installer' ] || quit -e "Install helper not found:" "$PWD/installer"
     local opts=('./installer' "$@")
     DAT_SELF="$CEN_NAME"
-#    dryrun -s "source ${opts[@]}" && return
     trace -a -c "Sourcing" "${opts[@]}"
     source "${opts[@]}"
 }

@@ -153,39 +153,39 @@ msgstr ""
 msgid "Not running a debian system?"
 msgstr ""
 
-#: /var/centauri/tools/centaurisoho:442
+#: /var/centauri/tools/centaurisoho:443
 msgid "Unsupported hardware architecture:"
 msgstr ""
 
-#: /var/centauri/tools/centaurisoho:480
+#: /var/centauri/tools/centaurisoho:481
 msgid "Updating parameters from 'setup.conf'"
 msgstr ""
 
-#: /var/centauri/tools/centaurisoho:522
+#: /var/centauri/tools/centaurisoho:523
 msgid "Creating network configuration cache"
 msgstr ""
 
-#: /var/centauri/tools/centaurisoho:525
+#: /var/centauri/tools/centaurisoho:526
 msgid "Replace the existing network configuration"
 msgstr ""
 
-#: /var/centauri/tools/centaurisoho:609
+#: /var/centauri/tools/centaurisoho:610
 msgid "Update '%s' files from repository"
 msgstr ""
 
-#: /var/centauri/tools/centaurisoho:634
+#: /var/centauri/tools/centaurisoho:635
 msgid "File not in repository"
 msgstr ""
 
-#: /var/centauri/tools/centaurisoho:639
+#: /var/centauri/tools/centaurisoho:640
 msgid "items"
 msgstr ""
 
-#: /var/centauri/tools/centaurisoho:646
+#: /var/centauri/tools/centaurisoho:647
 msgid "Updated %s folders, %s items, %s not in repository"
 msgstr ""
 
-#: /var/centauri/tools/centaurisoho:682
+#: /var/centauri/tools/centaurisoho:683
 msgid "Minimum password length is 8 chars"
 msgstr ""
 

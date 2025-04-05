@@ -448,7 +448,7 @@ do_guikill() {
     timer -w 1
 }
 
-# using /etc/X11/xinit/xinit.rc to run a script: <launch>...
+# using /etc/X11/xinit/xinit.rc to run a script/tool: <user>
 do_launcher() {
     if [ "${1:--}" = '-' ] ; then
         remove ".$CEN_NAME" ; return
@@ -458,15 +458,23 @@ do_launcher() {
     [ "$CEN_TOOLS/$CEN_NAME" -nt "$home/.$CEN_NAME" ] && topt='-t'
 
     app_byname indx - "$1" && tcmd="${DAT_APPL_COMMAND[indx]}"
+
+    # For '<tool>' without args create a symlink, otherwise a wrapper
+
     if [ "${tcmd:--}" = '-' ] ; then
         set -- centaurilauncher --term viewer
     else
         set -- $tcmd
     fi
-    create $topt -b -h - -- "$home/.$CEN_NAME" 755 "$user:" <<!EOF
+    if [ $# = 1 ] ; then
+        sysfind -f -s tcmd -- "$tcmd"
+        symlink -- "$home/.$CEN_NAME" "$tcmd"
+    else
+        create $topt -b -h - -- "$home/.$CEN_NAME" 755 "$user:" <<!EOF
 export XDG_CURRENT_DESKTOP=xinit
 exec $@
 !EOF
+    fi
 }
 
 # check for network: [-r]
@@ -704,7 +712,7 @@ actionInstall() {
                 create -t -- "$home/.hushlogin"
             fi
 
-            file="$CEN_TOOLS/Desktop/$user-home.tgz"
+            file="$CEN_TOOLS/Display/$user-home.tgz"
             [ -e "$file" ] && system -e -p -- tar -xaf "$file" -C "$home"
             symlink -n -- "$CEN_TOOLS/$CEN_NAME" "$home/$DAT_LOGINLINK"
             system -q chown -R "$user:" "$home" ; system -q chmod 775 "$home"

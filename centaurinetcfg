@@ -1473,7 +1473,7 @@ actionOptions() {
         ldap)   desc="provides LDAP service" ;;
         manual) desc="not managed by centaurinetcfg/centauriswitch" ;;
         mdns)   desc="" ;;
-        metr*)  desc="" ;;
+        metr*)  desc="interface IP metric priority" ;;
         mobile) desc="mobile device, notebook" ;;
         nm)     desc="use NetwokManager" ;;
         nomac)  desc="firewall: don't check MAC addresses" ;;

@@ -1540,19 +1540,17 @@ do_dial() {
             case "$_args" in
                 gsm*|mod*)
                         _wdev='/dev/gsmmodem'  ; _defs=('gsmmodem' "$CEN_NAME") ;;
-                rout*)  _wdev='/dev/lterouter' ; _defs=('eth2') ;;
-                teth*)  _wdev='/dev/usbrouter' ; _defs=('usb0' - - 1400) ;;
+                rout*)  _wdev='/dev/lterouter' ; _defs=('eth2|eth1') ;;
+                teth*)  _wdev='/dev/usbrouter' ; _defs=('usb0|eth1' - - 1400) ;;
                 wlan)   _wdev="/sys/class/net/${_args[1]:-wlan0}" ; _defs=() ;;
                 none)   ddev= ; return 0 ;;
                 [a-z]*) _wdev="/dev/usbrouter-$_args" ; _defs=('usb0' - - 1400) ;;
                 *)      warning "Unsupported dial configuration:" "$dial" ; continue ;;
             esac
             [ -e "$_wdev" ] || continue                 # must have device
-                                                        # get kernel interface name
-            netiface -k -s ddev -- "${_args[1]:-${_defs[0]}}"
-            if [ -z "$ddev" ] ; then
-                ddev="${_args[1]:-${_defs[0]}}" ; return 5
-            fi
+            splitjoin -d '|' -x ___dial_kiface -- \
+                    "${_args[1]:-${_defs[0]}}"          # kernel iface name from list
+            [ -z "$ddev" ] && break                     # mapping failed or not found
             dcfg[0]="${_args[2]:-${_defs[1]:--}}"       # config or gateway
             dcfg[1]="${_args[3]:-${_defs[2]:--}}"       # host ip
             dcfg[2]="${_args[4]:-${_defs[3]:--}}"       # mtu
@@ -1564,6 +1562,14 @@ do_dial() {
             return 0
         done
         dial= ; ddev= ; return 1
+    }
+
+    ___dial_kiface() {
+        if netiface -k -s ddev -x -- "$1" ; then
+            trace -a -c -p 'dial iface' "'%s' -> '%s' OK" "$1" "$ddev" ; return 1
+        else
+            trace -a -c -p 'dial iface' "'%s' -> '%s' No device" "$1" "${ddev:-<unknown>}" ; return 0
+        fi
     }
 
     # --------------------------------------------------------------------------
@@ -1607,7 +1613,7 @@ do_dial() {
                 ;;
     [a-z]*)     kind="Router" ; ___dial_router ; stat=$?
                 ;;
-    '')         stat=4 ;;
+    '')         stat=4 ;;           # see ___dial_device
     *)          stat=6 ;;
     esac
 
