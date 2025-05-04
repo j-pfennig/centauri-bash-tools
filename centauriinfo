@@ -4,7 +4,7 @@ CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2007-2025; "$"BSD License"
 CEN_TITLE=$"Collect and show some usefull information"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f - '0.52:4' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -t - '0.52:4' || exit 2
 
 CEN_OPT_ALL=                    # see --all
 CEN_OPT_DELETE=                 # see --delete
@@ -1387,7 +1387,7 @@ actions() {
     env*)
         invoke    'envir'      - 0 1 ;;
     fin|find)
-        invoke    'find'       - 1 ;;
+        invoke    'find'       - 1 + ;;
     ind*)
         invoke -r 'index'      - 0 1 ;;
     man*)
@@ -1428,8 +1428,9 @@ usage() {
         -a - \
         -a 'disks   [all|drives] '$"show disk usage (detailed)" \
         -a 'envir   [<glob>]'     $"show environment variables (optional glob filter)" \
-        -a 'motd    [disk]'       $"show disk usage (in /etc/motd format)" \
-        -a 'mounts  [all|drives] '$"show mounted disk partions" \
+        -a 'find    [--- -]'      $"search and list files or folders using 'find'" \
+        -a 'motd    [disk]'       $"show disk usage (in '/etc/motd' format)" \
+        -a 'mounts  [all|drives] '$"show mounted disk partitions" \
         -a 'syslog  [--- -b|-f|-t] [-g] [<expr>]' \
         -a -                      $"show journalctl output" \
         -a 'users'                $"show real users (same as 'centaurildap users')" \

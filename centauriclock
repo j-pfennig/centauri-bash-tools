@@ -4,7 +4,7 @@ CEN_LEGAL="Dr. J. Pfennig (c) 2024-2025; all rights reserved"
 CEN_TITLE=$"An extendable HTML based Day-Time-Clock"
 
 # Import the bash library
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -g - '0.11:4' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -g - '0.12:5' || exit 2
 
 #context -v 2                       # debug output
 
@@ -25,14 +25,14 @@ DAT_UNCLUTTER=
 
 if [ "$CEN_NAME" = '.centauristartup' ] ; then
     CEN_NAME='centauriclock' ; CEN_OPT_BASE='-' ;  CEN_OPT_TIMER=1
-    [ $# = 0 ] && set -- run --quiet --gui=1
+    [ $# = 0 ] && set -- run --gui=0
 fi
 
 
 DAT_BASEDIR="~/.local/$CEN_NAME"    # defaults ...
 DAT_HTMLTXT="$CEN_NAME.html"
 DAT_SIZEPNT='10vw'
-DAT_STARTUP="${CEN_NAME}.bash"
+DAT_STARTUP="./${CEN_NAME}.bash"
 DAT_LANGGUI='en'
 
 case "${LANG,,}" in                 # get internal language code...
@@ -290,17 +290,20 @@ actionRun() {
     create_html "$surl"
 
     # run startup tool
+
     [ -n "$CEN_OPT_EXEC" ] && DAT_STARTUP="$CEN_OPT_EXEC"
+
+     # without --exec the startup tool is optional
     if PATH=".:$PATH" system -c "$DAT_STARTUP" ; then
-        if [ "${DAT_STARTUP%.bash}" = "$DAT_STARTUP" ] ; then
-          trace -a "Executing startup tool:" "$DAT_STARTUP"
-          system -g 1 -f -p -- "$DAT_STARTUP" ||
-              quit -- $"Stopped by startup tool"
-        else
-            embed -b -- "$DAT_STARTUP"
-        fi
-    elif [ -n "$CEN_OPT_EXEC" ] ; then
-        system -c -f "$DAT_STARTUP"
+        trace -a -c "Run startup tool" "$DAT_STARTUP"
+    elif [ -z "$CEN_OPT_EXEC" ] ; then      # no startup skript ...
+        DAT_STARTUP='false'
+        trace -a "No startup tool to be executed"
+    fi
+
+    # this can intentionally be fatal if --exec=<tool> is invalid
+    if [ "$DAT_STARTUP" != 'false' ] ; then
+        sysrun -g 1 -f -p -- "$DAT_STARTUP" || quit -- $"Stopped by startup tool"
     fi
 
     local args=( '-A' "lang=${CEN_OPT_LANG:-$DAT_LANGGUI}"
@@ -308,9 +311,10 @@ actionRun() {
                  'viewer' "$surl"
                )
 
-    # start timer, run in background
+    # start timer, run in background, no cleanups
     if [ "$CEN_OPT_TIMER" = 1 ] ; then
         sysrun -q systemd-run --user --on-calendar='*-*-* *:00:20' "$CEN_NAME" timer &
+        disown $!                                       # avoid hanging on startup
         DAT_DPMS_OFF='dpms off --' ; actionTimer &
         quit -h                                         # must run quit hooks ...
         embed -x -v -z centaurilauncher --terminal "${args[@]}"
@@ -318,6 +322,10 @@ actionRun() {
 
     # ... other user (no background, no timer)
     embed -v -z centaurilauncher --terminal "${args[@]}"
+    if [ "$DAT_STARTUP" != 'false' ] ; then
+        message "Terminating workers ..."
+        sysrun -e -p -- pkill -s0 -A        # ouch...
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -332,12 +340,12 @@ actionTimer() {
     printf -v hour "%(%H)T" -1 ; [ "$hour" != 0 ] && hour="${hour#0}"
     printf -v zone "%(%Z)T" -1
     [ "$zone" = 'CEST' ] || ((hour += 1))
-    message $"Brightness timer:" "$zone ${hour}h -> ${bval[hour]}"
+    trace $"Brightness timer:" "$zone ${hour}h -> ${bval[hour]}"
     embed -v -z centauripower --force $DAT_DPMS_OFF brightness "${bval[hour]}"
 }
 
 # ------------------------------------------------------------------------------
-# implement option parsing: <option> [<argument>]
+# option parsing: <option> [<argument>]
 # ------------------------------------------------------------------------------
 options() {
     case "$1" in

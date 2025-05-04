@@ -1,9 +1,9 @@
 #!/usr/bin/bash
 # ------------------------------------------------------------------------------
-CEN_LEGAL="Dr. Jürgen Pfennig (c) 2020-2024; BSD License"
+CEN_LEGAL="Dr. Jürgen Pfennig (c) 2020-2025; BSD License"
 CEN_TITLE="Run a program or shell in a chroot environment"
 
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m ext -y - '0.10:4' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m ext -y - '0.20:4' || exit 2
 # don't use win (which would pull-in ext, ins and sys) in package to save space
 [ -z "$CEN_PACKAGE" ] && embed -m _centauri_bash_win
 
@@ -13,6 +13,7 @@ CEN_OPT_BASE=                   # see --base
 CEN_OPT_DPI=                    # see --dpi
 CEN_OPT_ENVVAR=()               # see --envvar
 CEN_OPT_MOUNTS=                 # see --mounts
+CEN_OPT_DOMAIN=                 # see --domain
 CEN_OPT_NICK=                   # see --nick
 CEN_OPT_USER=                   # see --user
 
@@ -20,13 +21,12 @@ DAT_QUIT_LIST=                  # see quit()
 DAT_MOUNT_LIST=                 # see do_setup
 DAT_TEMPDIR=                    # temp folder
 DAT_NICK=                       # distribution nick name
+DAT_CONF=                       # domain (configuration)
 DAT_HOST=
 DAT_MODE=
+DAT_ADDR=                       # server IPv4
+DAT_SERV=                       # server name
 
-# locale SE
-# /etc/hosts   10.21.2.11 alpha alpha.centauri.home
-# localedef -f UTF-8 -i en_US en_SE.UTF-8
-# unset LC_TIME (LANG)
 # ------------------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------------------
@@ -133,29 +133,43 @@ actionChroot() {
 }
 
 # ------------------------------------------------------------------------------
-# Initialize chroot systen: <distro> <host> [<mode>]
+# Initialize chroot systen: <host> [<mode>]
 # ------------------------------------------------------------------------------
 actionInit() {
     local owni="$CEN_TOOLS/centauriowner"
-    [ -x "$owni" ] || owni="$CEN_TOOLS/ownerInfo"
+    system -c -f debootstrap
 
     if [ -n "$CEN_OPT_NICK" ] ; then
         DAT_NICK="$CEN_OPT_NICK"
     else
-        case "$1" in
-            buster)     ;;
-            bullseye)   ;;
-            bookworm)   ;;
-            *)          fatal "Unknown distribution, use option '--nick=...'"
-        esac
-        DAT_NICK="$1"
+        sysversion -u
+        DAT_NICK="$CEN_SYS_NICKNAME"
     fi
-    DAT_HOST="$2"
-    DAT_MODE="${3:-workstation}"
+    case "${DAT_NICK:--}" in
+        -)          fatal "Unknown distribution, use option '--nick=...'" ;;
+        buster)     ;;
+        bullseye)   ;;
+        bookworm)   ;;
+        trixie)     ;;
+        forky)      ;;
+        *)          fatal "Unsupported distribution, use option '--force'"
+    esac
 
-    system -c -f debootstrap
+    DAT_HOST="$1"
+    DAT_MODE="${2:-workstation}"
 
-    local dchk="$CEN_OPT_BASE/bin" dist="$1"
+    netquery -f -s DAT_SERV server
+    nethost -f -- "$DAT_SERV"
+    DAT_ADDR="$_nethost_ip"
+
+    if [ -n "$CEN_OPT_DOMAIN" ] ; then
+        DAT_CONF="$CEN_OPT_DOMAIN"
+    else
+        netquery -f -s DAT_CONF domain
+        DAT_CONF="${DAT_CONF%%.*}"
+    fi
+
+    local dchk="$CEN_OPT_BASE/bin"
     [ "$dchk" -ef '/bin' ] && fatal "Cannot use root fs"
     if [ -d "$dchk" ] ; then
         confirm -y -n "Base folder not empty. Continue" || return
@@ -165,7 +179,7 @@ actionInit() {
     if [ -x "$CEN_OPT_BASE/usr/bin/apt" ] ; then
         message -a "Skipping: debootstrap"
     else
-        sysrun -e -z debootstrap "$dist" "$CEN_OPT_BASE"
+        sysrun -e -z debootstrap "$DAT_NICK" "$CEN_OPT_BASE"
     fi
 
     ___inhibit() {
@@ -240,9 +254,9 @@ services:       db files
 
     if ___setup '/etc/locale.gen' "Install locales and vim" ; then
         create -c -t "$CEN_OPT_BASE/etc/apt/sources.list" <<!EOF
-deb http://deb.debian.org/debian $dist main contrib non-free
+deb http://deb.debian.org/debian $DAT_NICK main contrib non-free
 !EOF
-        ___host 10.21.2.10 alpha alpha.centauri.home
+        ___host "$DAT_ADDR" "$DAT_SERV" "$DAT_SERV.$DAT_CONF.home"
         do_chroot apt update
 
         do_chroot apt --yes install bash-completion locales vim
@@ -252,27 +266,14 @@ deb http://deb.debian.org/debian $dist main contrib non-free
         ___copy '/etc/apt'  'etc/apt'  'apt.conf'
     fi
 
-    if ___setup '/etc/ssh' "Install console-setup, ssh, synaptic and kernel" ; then
+    if ___setup '/etc/ssh' "Install console-setup, ssh and synaptic" ; then
 
         do_chroot tasksel install ssh-server
         do_chroot apt --yes install console-setup wpasupplicant ifmetric net-tools psmisc rsync \
                                     tree synaptic encfs libpam-encfs libpam-mount libpam-mount-bin \
                                     sssd-ad sssd-dbus sssd-krb5 sssd-tools libpam-sss libnss-sss
-
-        local marc
-        system -s marc -e -p -- uname -m
-        if [ "$marc" = "x86_64" ] ; then
-            do_chroot apt --yes install firmware-linux-free
-            do_chroot apt --yes install firmware-misc-nonfree firmware-iwlwifi firmware-realtek
-            do_chroot apt --yes install linux-image-amd64
-        else
-            warning "Kernel installation skipped, unknown architecture:" "${marc:-unknown}"
-        fi
-        embed "$owni" -A -P "$CEN_OPT_BASE" save "$CEN_OPT_BASE/root/OWNER-bootstrap" || quit -e
-
         CEN_AUTOIND=
         ___copy '/etc/wpa_supplicant' 'etc/wpa_supplicant' wpa_supplicant.conf
-        #___copy '/etc/network' 'etc/network' interfaces
         create -c -t "$CEN_OPT_BASE/etc/network/interfaces" <<!EOF
 auto lo eth0 wlan0
 
@@ -289,22 +290,33 @@ iface wlan0 inet dhcp
    metric  600
 !EOF
     fi
+    embed "$owni" -A -B "$CEN_OPT_BASE" save "$CEN_OPT_BASE/root/OWNER-bootstrap" || quit -e
+
+    if ___setup '/usr/lib/modules' "Install a linux kernel" ; then
+        local marc
+        system -s marc -e -p -- uname -m
+        if [ "$marc" = 'x86_64' ] ; then
+            do_chroot apt --yes install firmware-linux-free
+            do_chroot apt --yes install firmware-misc-nonfree firmware-iwlwifi firmware-realtek
+            do_chroot apt --yes install linux-image-amd64
+        else
+            warning "Kernel installation skipped, unknown architecture:" "${marc:-unknown}"
+        fi
+    fi
 
     if ___setup '/var/centauri/configs' "Install centauri-tools ($DAT_NICK)" ; then
-        local dlib dtoo dver="$CEN_ROOT/configs/$dist/@admin"
+        local dlib dtoo dver="$CEN_ROOT/configs/$DAT_NICK/@admin"
         folder -s DAT_TEMPDIR -m "$CEN_OPT_BASE/tmp/${CEN_NAME}_$$"
         folder -s dlib -m "$DAT_TEMPDIR/library"
         folder -s dtoo -m "$DAT_TEMPDIR/tools"
-        embed centauricopy -s "alpha:$dver/library" -i "*_???" "$dlib" || return
-        embed centauricopy -s "alpha:$dver/tools" -x "*/*" -i "*centauri*" "$dtoo" || return
+        embed centauricopy -s "$DAT_SERV:$dver/library" -i "*_???" "$dlib" || return
+        embed centauricopy -s "$DAT_SERV:$dver/tools" -x "*/*" -i "*centauri*" "$dtoo" || return
 
-        do_chroot env -i "/tmp/${CEN_NAME}_$$/tools"/centauriconfig --yes \
-                  --nick="$DAT_NICK" --repos=alpha:centauri setup init
-    fi
+        do_chroot env -i "/tmp/${CEN_NAME}_$$/tools"/centauriconfig --yes --master \
+                  --nick="$DAT_NICK" --repos="$DAT_SERV:$DAT_CONF" setup init || quit -e
+        do_chroot centauricreate --template=config /etc/default/centauri-bash-lib
 
-    if ___setup '/etc/default/centauri-bash-lib' "Apply repository settings" ; then
-        embed  "$owni" -A -P "$CEN_OPT_BASE" save "$CEN_OPT_BASE/root/OWNER-initial" || quit -e
-        do_chroot centauriconfig --yes --role="$DAT_MODE" --host="$DAT_HOST" setup install -- override
+        ___copy '/etc/default' 'etc/default' 'centaurinetcfg'
         remove -d "$CEN_OPT_BASE/etc/network/"interfaces*
         do_chroot centaurinetcfg setup "$DAT_HOST"
     fi
@@ -318,7 +330,7 @@ Remaining installation steps:
 
     centauripackage -I -A <list>        # install remaining packets
     vi /etc/fstab ...                   # edit fstab and other
-    centauriconfig --host="$DAT_HOST" --nick="$DAT_NICK" --repos=alpha:centauri get -- rput
+    centauriconfig --host="$DAT_HOST" --nick="$DAT_NICK" --repos=$DAT_SERV:$DAT_CONF get -- rput
                                         # push to repository
     chgrp ... /usr/bin/ssh-agent        # group must be _ssh (or ssh before bookworm)
 
@@ -385,13 +397,15 @@ options() {
     case "$1" in
 
     -B|--bas|--base)
-        optarg "base"   -            -t    ;;   # folder
+        optarg 'base'   -            -t    ;;   # folder
     -D|--dpi)
         optarg 'dpi'    -            -n    ;;
     -E|--env*)
-        optarg "envvar" []           -t    ;;   # array
+        optarg 'envvar' []           -t    ;;   # array
+    -I|--dom*)
+        optarg 'domain' -            -t    ;;   # any text
     -M|--mou*)
-        optarg "mounts" -                  ;;   # flag
+        optarg 'mounts' -                  ;;   # flag
     -N|--nic*)
         optarg 'nick'   -            -t    ;;   # any text
     -U|--use|--user)
@@ -415,7 +429,7 @@ actions() {
         fi ;;
 
     ini*)
-        invoke 'init'     -             2  ;;   # one arg
+        invoke 'init'     -           1 2 ;;    # 1 .. 2 args
     log*)
         invoke 'login'    actionChroot  0 ;;    # no args
     pas*)
@@ -441,11 +455,13 @@ $CEN_USE_OPTIONS
 
        -B --base   <fldr>    (required) chroot folder to use
        -E --envvar <envv>    (array) pass an environment variable
+       -I --domain <conf>    domain name (configuration name)
        -M --mounts           mount /home /export /shared /tmp to chroot
+       -N --nick   <dist>    distribution nickname
        -U --user   <user>    run shell/program as a user
 
 actions:
-       init        <dist> <name> [<mode>]
+       init        <dist> <name> [<role>]
                              setup chroot for given debian distribution
        login                 run login shell as a user (see --user)
        passwd    [<user>|-]  add entries to /etc/passwd, '-' for all
@@ -453,13 +469,18 @@ actions:
        umount                undo mounts to chroot environment
        [execute]   <prog>    run a program as a user (see --user)
 
+parameters:
+       <dist>         Debian distribution nick name
+       <name>         Name of the chroot host
+       <role>         One of: workstation|primary|secondary (default: workstation)
+
 examples:
        $CEN_NAME -B my-container my-program       # run a program
 
        $CEN_NAME -B my-container shell            # run shell as root
        $CEN_NAME -B my-container -M login         # run login shell as user
 
-       $CEN_NAME -B my-container init testing     # setup a chroot environment
+       $CEN_NAME -B xxx -N trixie init work1      # setup a chroot environment
 !EOF
 }
 

@@ -15,7 +15,7 @@ CEN_SVC_SHORT="Interface/Route Configuration"
 ### END INIT INFO
 
 # Import the bash library, set name and version
-PATH+=":/usr/local/bin:${0%/*}" . _centauri_bash_lib -a -d -f -v - '0.44:4' || exit 2
+PATH+=":/usr/local/bin:${0%/*}" . _centauri_bash_lib -a -d -f -v - '0.45:4' || exit 2
 
 # don't run as a service if centauriswitch is active
 inhibit "Inhibited by centauriswitch"
@@ -785,24 +785,6 @@ do_extender() {
         fi
     }
 
-#    ___extender_dhcp() {
-#        # daemon running?
-#        if pidfile -c -s ppid -- "$namd" ; then
-#            case "$mode" in
-#            2)  message -a "dhcp-helper is running (pid=$ppid)" ; return 0 ;;
-#            1)  message -a "dhcp-helper is already running (pid=$ppid)" ; return 0 ;;
-#            esac
-#        fi
-#
-#        case "$mode" in
-#        2)  message -a "dhcp-helper not running" ;;
-#        1)  system -e -p -- dhcp-helper -r "$CEN_ROOT/transient/$namd.pid" \
-#                                        -i "$iout" -b "$iins" || return 1 ;;
-#        *)  pidfile -d -k - -- "$namd"
-#        esac
-#        return 0
-#    }
-
     ___extender_masq() {
         # daemon running?
         if pidfile -c -s ppid -- "$namd" ; then
@@ -819,10 +801,11 @@ do_extender() {
             fi
             nethost -- "$CEN_NET_SERVER_GEN"
             pidfile -n -- "$namd"
-            # using dhcp broadcasts via <itnk>, no-dns ...
+            # using dhcp as generic server via <itnk>, disable dns ...
+                    # could use dns broadcasts if all subnets have the same netmask
+                    # remove _nethost_ip to enable broacasts
             system -e -p -- dnsmasq -C /dev/null --pid-file="$CEN_PIDFILE" \
-                         --port=0 --dhcp-relay="${_netgetip%/*}","$iins" || return 1 ;;
-#                         --dhcp-relay="$_netgetip","$_nethost_ip" || return 1 ;;
+                         --port=0 --dhcp-relay="${_netgetip%/*},$_nethost_ip,$iins" || return 1 ;;
         *)  pidfile -d -k - -- "$namd"
         esac
         return 0
@@ -1216,7 +1199,7 @@ do_open() {
     # set '4addr' mode of wlan client in bridge
     local wdev="${DAT_OPEN_WLAN%% *}" wcfg="${DAT_OPEN_WLAN#* }"
     [ "$wcfg" = "$wdev" ] && wcfg="$CEN_NAME"
-    if [ -z "$wdev" ] ; then
+    if [ "${wdev:-none}" ] ; then
         trace -a "No WLAN configured" ; wdev='none'
     elif ! netiface -k -s wdev -x -- "$wdev" ; then
         warning "Configured WLAN not found:" "$DAT_OPEN_WLAN" ; wdev='none'
@@ -1965,8 +1948,8 @@ actionIpv6() {
 
     if [ "$mode" = 'chk' ] ; then
         local item know=0               # 0 no change,  1 disable IPv6, 2 IPv6 ok
-        netresolv -r
-        for item in "${_netresolv[@]:1}" ; do
+        netresolv -r 'nameserver'
+        for item in "${_netresolv[@]}" ; do
             $CEN_TRACE2 -a -c "IPv6 dns server" "$item"
             nethost -- "$item" || continue                  # unknown host
             know=1
