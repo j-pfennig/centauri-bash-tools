@@ -99,7 +99,7 @@ msgstr "Aktion find: Start-Verzeichnis"
 
 #: /var/centauri/tools/centauriinfo:1418
 msgid "do some housekeeping (archive, index and manifest)"
-msgstr ""
+msgstr "Hausaufgaben machen ('archive', 'index' und 'manifest')"
 
 #: /var/centauri/tools/centauriinfo:1419
 msgid "find file, optionally delete (see --delete)"
@@ -131,50 +131,36 @@ msgstr "Plattenbelegung anzeigen (detailliert)"
 
 #: /var/centauri/tools/centauriinfo:1430
 msgid "show environment variables (optional glob filter)"
-msgstr ""
+msgstr "Umgebungsvariable anzeigen (optinales 'glob' Filter)"
 
 #: /var/centauri/tools/centauriinfo:1431
-msgid "show disk usage (in /etc/motd format)"
-msgstr ""
+msgid "search and list files or folders using 'find'"
+msgstr "Suchen und Listen von Dateien/Verzeichnissen mit 'find'"
 
 #: /var/centauri/tools/centauriinfo:1432
-msgid "show mounted disk partions"
-msgstr "Eingehängte Partionen anzeigen"
+msgid "show disk usage (in '/etc/motd' format)"
+msgstr "Plattenplatzbelegung anzeigen (im '/etc/motd' Format)"
 
-#: /var/centauri/tools/centauriinfo:1434
+#: /var/centauri/tools/centauriinfo:1433
+msgid "show mounted disk partitions"
+msgstr "Eingehängte Partitionen anzeigen"
+
+#: /var/centauri/tools/centauriinfo:1435
 msgid "show journalctl output"
 msgstr "Anzeige von 'journalctl' Ausgabe"
 
-#: /var/centauri/tools/centauriinfo:1435
+#: /var/centauri/tools/centauriinfo:1436
 msgid "show real users (same as 'centaurildap users')"
-msgstr ""
+msgstr "Namen wirklicher Benutzer anzeigen"
 
-#: /var/centauri/tools/centauriinfo:1437
+#: /var/centauri/tools/centauriinfo:1438
 msgid "••• network •••"
 msgstr "••• Netzwerk •••"
 
-#: /var/centauri/tools/centauriinfo:1439
-msgid "list IPv4/6 adresses using 'ip addr list ...'"
-msgstr ""
-
 #: /var/centauri/tools/centauriinfo:1440
+msgid "list IPv4/6 adresses using 'ip addr list ...'"
+msgstr "IPv4/6 Adressen mit 'ip addr list ...' auflisten"
+
+#: /var/centauri/tools/centauriinfo:1441
 msgid "list IPv4/6 routes using 'ip route list ...'"
-msgstr ""
-
-#~ msgid "Documentation"
-#~ msgstr "Dokumentation"
-
-#~ msgid "Directories (Volumes)"
-#~ msgstr "Verzeichnisse (Volumes)"
-
-#~ msgid "Filesystem"
-#~ msgstr "Dateisystem"
-
-#~ msgid "Administration"
-#~ msgstr "Verwaltung"
-
-#~ msgid "Backups"
-#~ msgstr "Sicherungen"
-
-#~ msgid "Manifeste"
-#~ msgstr "Manifeste"
+msgstr "IPv4/6 Routen mit 'ip route list ...' auflisten"
