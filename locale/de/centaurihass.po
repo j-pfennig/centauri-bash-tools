@@ -1,0 +1,342 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8\n"
+
+#: /var/centauri/tools/centaurihass:3
+msgid "BSD License"
+msgstr "BSD Lizenz"
+
+#: /var/centauri/tools/centaurihass:4
+msgid "Tool to (un)install and run HomeAssistant Core"
+msgstr "Kommando zum (De-)Installieren und Ausführen von HomeAssistant Core"
+
+#: /var/centauri/tools/centaurihass:78
+msgid "Service '%s' is masked"
+msgstr "Dienst '%s' is maskiert"
+
+#: /var/centauri/tools/centaurihass:99
+msgid "'%s' already installed. try '%s'"
+msgstr "'%s' ist schon installiert. Versuche '%s'"
+
+#: /var/centauri/tools/centaurihass:101
+msgid "User '%s' home missing, run '%s' to re-install"
+msgstr "Home-Verzeichnis von '%s' fehlt, '%s' zur Neueinrichtung"
+
+#: /var/centauri/tools/centaurihass:106
+msgid "'%s' not found, run '%s' to install it"
+msgstr "'%s' nicht gefunden, starte '%s' zum Installieren"
+
+#: /var/centauri/tools/centaurihass:122
+msgid "Installation of extra packages disabled"
+msgstr "Installation zusätzlicher Pakete abgestellt"
+
+#: /var/centauri/tools/centaurihass:127 /var/centauri/tools/centaurihass:139
+msgid "No extra packages to install"
+msgstr "Keine zusätzlichen Pakete zu installieren"
+
+#: /var/centauri/tools/centaurihass:169
+msgid "Stopped '%s' service"
+msgstr "Dienst '%s' angehalten"
+
+#: /var/centauri/tools/centaurihass:205
+msgid "You should install your distro's default python version"
+msgstr "Die Python Version der Distribution sollte installiert sein"
+
+#: /var/centauri/tools/centaurihass:211
+msgid "Using distribution versions"
+msgstr "Distributions-Versionen verwenden"
+
+#: /var/centauri/tools/centaurihass:223
+msgid "Using latest known versions"
+msgstr "Letzte bekannte Versionen verwenden"
+
+#: /var/centauri/tools/centaurihass:248
+msgid "Python needs quirk (have=%s  required=%s)"
+msgstr "Python braucht ein Quirk (habe=%s brauche=%s)"
+
+#: /var/centauri/tools/centaurihass:250
+msgid "Python version OK (have=%s  required=%s)"
+msgstr "Python Version OK (habe=%s brauche=%s)"
+
+#: /var/centauri/tools/centaurihass:255
+msgid "Versions: %s (%s)  %s (Python)"
+msgstr "Versionen: %s (%s)  %s (Python)"
+
+#: /var/centauri/tools/centaurihass:261
+msgid "Need custom python '%s', setting --quirk=1"
+msgstr "Brauche eigenes Python '%s', setze --quirk=1"
+
+#: /var/centauri/tools/centaurihass:273
+msgid "Remove existing python environment (recommended)"
+msgstr "Vorhandene Python-Umgebung entfernen (empfohlen)"
+
+#: /var/centauri/tools/centaurihass:285
+msgid "Using python virtual environment:"
+msgstr "Benutzte virtuelle Python-Umgebung:"
+
+#: /var/centauri/tools/centaurihass:289
+msgid "Failed to activate python environment:"
+msgstr "Aktivieren der Python-Umgebung fehlgeschlagen:"
+
+#: /var/centauri/tools/centaurihass:352
+msgid "Enabled '%s', autostart"
+msgstr "'%s' eingerichtet, Auto-Start"
+
+#: /var/centauri/tools/centaurihass:365
+msgid "Install '%s' build dependencies"
+msgstr "Installiere '%s' Build-Abhängigkeiten"
+
+#: /var/centauri/tools/centaurihass:367
+msgid "'%s' already installed"
+msgstr "'%s' ist schon installiert"
+
+#: /var/centauri/tools/centaurihass:402
+msgid "Build dependencies are installed"
+msgstr "Build-Abhängigkeiten sind installiert"
+
+#: /var/centauri/tools/centaurihass:415
+msgid "Install '%s' version '%s'"
+msgstr "Installiere '%s' Version '%s'"
+
+#: /var/centauri/tools/centaurihass:461
+msgid "The 'mosquitto' mqtt broker service is disabled"
+msgstr "Der 'mosquitto' MQTT Broker Dienst ist abgestellt"
+
+#: /var/centauri/tools/centaurihass:462
+msgid "The 'mosquitto' mqtt broker service is masked"
+msgstr "Der 'mosquitto' MQTT Broker Dienst ist maskiert"
+
+#: /var/centauri/tools/centaurihass:464
+msgid "Also install 'mosquitto' mqtt broker"
+msgstr "Auch den 'mosquitto' MQTT Broker installieren"
+
+#: /var/centauri/tools/centaurihass:473
+msgid "The current user must be '%s'"
+msgstr "Der aktuelle Benutzer muss '%s' sein"
+
+#: /var/centauri/tools/centaurihass:476
+msgid "Service active, run '%s' and retry"
+msgstr "Dienst aktiv, '%s' starten und nochmal versuchen"
+
+#: /var/centauri/tools/centaurihass:492
+msgid "Ready to install '%s'.  This can take a very long time."
+msgstr "Bereit '%s' zu Installieren. Das kann sehr lange dauern."
+
+#: /var/centauri/tools/centaurihass:493
+msgid "You can stop the installation now and continue later by running:"
+msgstr "Wer jetzt abbricht kann später mit diesem Kommando fortsetzen:"
+
+#: /var/centauri/tools/centaurihass:496
+msgid "Continue to install '%s'"
+msgstr "Weiter mit Installation von '%s'"
+
+#: /var/centauri/tools/centaurihass:498
+msgid "Installing..."
+msgstr "Installieren..."
+
+#: /var/centauri/tools/centaurihass:501
+msgid "Continue to upgrade %s"
+msgstr "Weiter mit Aktualierung von '%s'"
+
+#: /var/centauri/tools/centaurihass:503
+msgid "Upgrading..."
+msgstr "Aktualisieren..."
+
+#: /var/centauri/tools/centaurihass:509
+msgid "Done."
+msgstr "Fertig."
+
+#: /var/centauri/tools/centaurihass:541
+msgid "enabled"
+msgstr "eingerichtet"
+
+#: /var/centauri/tools/centaurihass:541
+msgid "not enabled"
+msgstr "abgestellt"
+
+#: /var/centauri/tools/centaurihass:543
+msgid "Autorun: %s   Service: %s"
+msgstr "Auto-Start: %s   Dienst %s"
+
+#: /var/centauri/tools/centaurihass:563
+msgid "Service '${DAT_SERV%.*}' is not enabled. Please"
+msgstr "Dienst '${DAT_SERV%.*}' ist nicht eingerichtet, bitte"
+
+#: /var/centauri/tools/centaurihass:564
+msgid "run '$CEN_NAME auto on' to enable or use option '--force'"
+msgstr "Aktivieren mit '$CEN_NAME auto on' oder Option '--force' setzen"
+
+#: /var/centauri/tools/centaurihass:570
+msgid "Start services"
+msgstr "Dienste starten"
+
+#: /var/centauri/tools/centaurihass:580
+msgid "No known '%s' installation"
+msgstr "Keine bekannte '%s' Installation"
+
+#: /var/centauri/tools/centaurihass:583
+msgid "Uninstall '$DAT_NAME'"
+msgstr "'$DAT_NAME' deinstallieren"
+
+#: /var/centauri/tools/centaurihass:593
+msgid "Please remove folder '%s' and user '%s' manually"
+msgstr "Bitte Verzeichnis '%s' und '%s' Benutzerkonto von Hand löschen"
+
+#: /var/centauri/tools/centaurihass:595
+msgid "Please remove user '%s' manually"
+msgstr "Bitte '%s' Benutzerkonto von Hand löschen"
+
+#: /var/centauri/tools/centaurihass:645
+msgid "Cannot connect to '%s'"
+msgstr "Keine Verbindung mit '%s'"
+
+#: /var/centauri/tools/centaurihass:658
+msgid "Please specify the '$DAT_NICK' URL to use"
+msgstr "Bitte die anzuzeigende '$DAT_NICK' URL angebeben"
+
+#: /var/centauri/tools/centaurihass:664
+msgid "Neither 'centaurilauncher' nor 'x-www-browser' found"
+msgstr "Weder 'centaurilauncher' noch 'x-www-browser' gefunden"
+
+#: /var/centauri/tools/centaurihass:727
+msgid "a bit mask of quirks to be applied"
+msgstr "Bit-Maske der anzuwendenden Quirks"
+
+#: /var/centauri/tools/centaurihass:728
+msgid "specify a different user (default: $DAT_USER)"
+msgstr "Diesen Benutzer verwenden (Vorgabe: $DAT_USER)"
+
+#: /var/centauri/tools/centaurihass:729
+msgid "Version to be installed  (default: $DAT_HAVER)"
+msgstr "Zu installierende Version (Vorgabe: $DAT_HAVER)"
+
+#: /var/centauri/tools/centaurihass:732
+msgid "behaviour of service '${DAT_SERV%.*}'"
+msgstr "Verhalten von Dienst '${DAT_SERV%.*}'"
+
+#: /var/centauri/tools/centaurihass:733
+msgid "install build dependencies"
+msgstr "Kompilationsumgebung einrichten"
+
+#: /var/centauri/tools/centaurihass:734
+msgid "install $DAT_NICK core"
+msgstr "'$DAT_NICK Core' installieren"
+
+#: /var/centauri/tools/centaurihass:735
+msgid "run $DAT_NICK '${DAT_EXEC##*/}' binary"
+msgstr "'$DAT_NICK' Programm '${DAT_EXEC##*/}' ausführen"
+
+#: /var/centauri/tools/centaurihass:736
+msgid "[internal] called by 'install' and 'upgrade'"
+msgstr "[intern] aufgerufen durch 'install' und 'upgrade'"
+
+#: /var/centauri/tools/centaurihass:737
+msgid "open a shell as user '$DAT_NAME'"
+msgstr "Eine Shell für Benutzer '$DAT_NAME' starten"
+
+#: /var/centauri/tools/centaurihass:738
+msgid "uninstall $DAT_NICK"
+msgstr "Deinstalliere '$DAT_NICK'"
+
+#: /var/centauri/tools/centaurihass:739
+msgid "upgrade $DAT_NICK"
+msgstr "Aktualisiere '$DAT_NICK'"
+
+#: /var/centauri/tools/centaurihass:740
+msgid "show python and $DAT_NICK versions"
+msgstr "Zeige Python und '$DAT_NICK' Versionen"
+
+#: /var/centauri/tools/centaurihass:741
+msgid "show $DAT_NICK web interface"
+msgstr "Starte die '$DAT_NICK' Web Anzeige"
+
+#: /var/centauri/tools/centaurihass:743 /var/centauri/tools/centaurihass:744
+msgid "run "
+msgstr "Starte "
+
+#: /var/centauri/tools/centaurihass:745 /var/centauri/tools/centaurihass:746
+msgid "... "
+msgstr "...    "
+
+#: /var/centauri/tools/centaurihass:749
+msgid "one of: on off status"
+msgstr "Eines von: on off status"
+
+#: /var/centauri/tools/centaurihass:750
+msgid "1 - https://github.com/pascallj/python3.x-backport'"
+msgstr "1 - https://github.com/pascallj/python3.x-backport'"
+
+#: /var/centauri/tools/centaurihass:751
+msgid "2 - do not install extra packages"
+msgstr "2 - Keine zusätzlichen Pakete installieren"
+
+#: /var/centauri/tools/centaurihass:752
+msgid "linux user name"
+msgstr "Linux Benutzername"
+
+#: /var/centauri/tools/centaurihass:753
+msgid "something like 'http://your-host:8123'"
+msgstr "Etwas in der Art 'http://mein-rechner:8123'"
+
+#: /var/centauri/tools/centaurihass:754
+msgid "$DAT_NICK version to install"
+msgstr "Zu installierende '$DAT_NICK' Version"
+
+#: /var/centauri/tools/centaurihass:757
+msgid "By default the last known good $DAT_NICK version gets installed."
+msgstr "Als Voreinstellung wird die letzte als gut bekannte $DAT_NICK"
+
+#: /var/centauri/tools/centaurihass:758
+msgid "This may trigger the installation of a back ported python version (see"
+msgstr "Version eigerichtet, was eine rückportierte Pythen Version erfordern"
+
+#: /var/centauri/tools/centaurihass:759
+msgid "'https://github.com/pascallj'). To stay with your distro's version"
+msgstr "kann. Siehe 'https://github.com/pascallj'. Um die Version der Distri-"
+
+#: /var/centauri/tools/centaurihass:760
+msgid "of python use option '--quirk=0':"
+msgstr "bution zu behalten benutze Option '--quirk=0':"
+
+#: /var/centauri/tools/centaurihass:762
+msgid "no back ported python"
+msgstr "kein rück-portiertes Python"
+
+#: /var/centauri/tools/centaurihass:764
+msgid "A full build on a Raspberry Pi can take about an hour, especially"
+msgstr "Die volle Einrichtung auf einem Raspberry Pi kann sehr lange dauern,"
+
+#: /var/centauri/tools/centaurihass:765
+msgid "the first 'run'. Try this command line and be patient:"
+msgstr "besonders beim ersten 'run'. Versuche dies mit viel Geduld:"
+
+#: /var/centauri/tools/centaurihass:769
+msgid "Do a release upgrade (via pip) and restart:"
+msgstr "Version aktualisieren (mit Pip) und Neustart:"
+
+#: /var/centauri/tools/centaurihass:773
+msgid "To start $DAT_NICK at boot time as a service enter:"
+msgstr "Zum Starten von '$DAT_NICK' beim Boot foldendes eingeben:"
+
+#: /var/centauri/tools/centaurihass:775
+msgid "enable service"
+msgstr "Dienst automatisch starten"
+
+#: /var/centauri/tools/centaurihass:776
+msgid "disable service"
+msgstr "Dienst nicht automatisch starten"
+
+#: /var/centauri/tools/centaurihass:778
+msgid "Action 'autorun' also creates or removes the '${DAT_ENAB##*/}' file"
+msgstr "Aktion 'autorun' erstellt oder löscht auf die '${DAT_ENAB##*/}' Datei,"
+
+#: /var/centauri/tools/centaurihass:779
+msgid "that is checked by the service as a start condition."
+msgstr "die als Startbedingung für den Dienst fungiert."
+
+#: /var/centauri/tools/centaurihass:783
+msgid "Run 'centaurisysinit default $DAT_NAME' if you want your machine"
+msgstr "Starte 'centaurisysinit default $DAT_NAME' wenn dein Recher im"
+
+#: /var/centauri/tools/centaurihass:784
+msgid "to start in kiosk mode with $DAT_NICK web interface at boot time."
+msgstr "Kiosk-Modus starten und dabei '$DAT_NAME web' ausführen soll."

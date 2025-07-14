@@ -1,0 +1,250 @@
+msgid ""
+msgstr "Content-Type: text/plain; charset=UTF-8\n"
+
+#: /var/centauri/tools/centauriweewx:3
+msgid "BSD License"
+msgstr "BSD Lizenz"
+
+#: /var/centauri/tools/centauriweewx:4
+msgid "Tool to (un)install and run WeeWX"
+msgstr "Kommando zum (De-)Installieren und Ausführen von WeeWX"
+
+#: /var/centauri/tools/centauriweewx:73
+msgid "Service '%s' is masked"
+msgstr "Dienst '%s' is maskiert"
+
+#: /var/centauri/tools/centauriweewx:94
+msgid "'%s' already installed. try '%s'"
+msgstr "'%s' ist schon installiert. Versuche '%s'"
+
+#: /var/centauri/tools/centauriweewx:96
+msgid "User '%s' home missing, run '%s' to re-install"
+msgstr "Home-Verzeichnis von '%s' fehlt, '%s' zur Neueinrichtung"
+
+#: /var/centauri/tools/centauriweewx:101
+msgid "'%s' not found, run '%s' to install it"
+msgstr "'%s' nicht gefunden, starte '%s' zum Installieren"
+
+#: /var/centauri/tools/centauriweewx:171
+msgid "Stopped '%s' service"
+msgstr "Service '%s' angehalten"
+
+#: /var/centauri/tools/centauriweewx:183
+msgid "Remove existing python environment (recommended)"
+msgstr "Vorhandene Python-Umgebung entfernen (empfohlen)"
+
+#: /var/centauri/tools/centauriweewx:191
+msgid "Using python virtual environment:"
+msgstr "Benutzte virtuelle Python-Umgebung:"
+
+#: /var/centauri/tools/centauriweewx:195
+msgid "Failed to activate python environment:"
+msgstr "Aktivieren der Python-Umgebung fehlgeschlagen:"
+
+#: /var/centauri/tools/centauriweewx:221
+msgid "Enabled '%s', autostart"
+msgstr "'%s' eingerichtet, Auto-Start"
+
+#: /var/centauri/tools/centauriweewx:233
+msgid "Install '%s' build dependencies"
+msgstr "Build-Abhängigkeiten installieren"
+
+#: /var/centauri/tools/centauriweewx:235
+msgid "'%s' already installed"
+msgstr "'%s' ist schon installiert"
+
+#: /var/centauri/tools/centauriweewx:245
+msgid "Build dependencies are installed"
+msgstr "Build-Abhängigkeiten sind installiert"
+
+#: /var/centauri/tools/centauriweewx:260
+msgid "Don't know how to start an editor"
+msgstr "Weiss keinen Editor zu starten"
+
+#: /var/centauri/tools/centauriweewx:263
+msgid "Missing configuration, did you run '%s'?"
+msgstr "Fehlende Konfiguration, wurde '%s' ausgeführt?"
+
+#: /var/centauri/tools/centauriweewx:275
+msgid "Install '%s' version '%s'"
+msgstr "Installiere '%s' Version '%s'"
+
+#: /var/centauri/tools/centauriweewx:314
+msgid "The 'lighttpd' web server service is disabled"
+msgstr "Der 'lighttpd' Web-Server Dienst ist abgestellt"
+
+#: /var/centauri/tools/centauriweewx:315
+msgid "The 'lighttpd' web server service is masked"
+msgstr "Der 'lighttpd' Web-Server Dienst ist maskiert"
+
+#: /var/centauri/tools/centauriweewx:317
+msgid "Also install 'lighttpd' web server"
+msgstr "Auch den 'lighttpd' Web-Server installieren"
+
+#: /var/centauri/tools/centauriweewx:327
+msgid "The current user must be '%s'"
+msgstr "Der aktuelle Benutzer muss '%s' sein"
+
+#: /var/centauri/tools/centauriweewx:330
+msgid "Service active, run '%s' and retry"
+msgstr "Dienst aktiv, '%s' starten und nochmal versuchen"
+
+#: /var/centauri/tools/centauriweewx:346
+msgid "Continue to install '%s'"
+msgstr "Weiter mit Installation von '%s'"
+
+#: /var/centauri/tools/centauriweewx:348
+msgid "Installing..."
+msgstr "Installieren..."
+
+#: /var/centauri/tools/centauriweewx:353
+msgid "Continue to upgrade '%s'"
+msgstr "Weiter mit Aktualierung von '%s'"
+
+#: /var/centauri/tools/centauriweewx:358
+msgid "Success, try '%s' to run service"
+msgstr "Fertig, Dienst kann mit '%s' gestartet werden"
+
+#: /var/centauri/tools/centauriweewx:390
+msgid "enabled"
+msgstr "eingerichtet"
+
+#: /var/centauri/tools/centauriweewx:390
+msgid "not enabled"
+msgstr "abgestellt"
+
+#: /var/centauri/tools/centauriweewx:392
+msgid "Autorun: %s   Service: %s"
+msgstr "Auto-Start: %s   Dienst: %s"
+
+#: /var/centauri/tools/centauriweewx:432
+msgid "No known '%s' installation"
+msgstr "Keine bekannte '%s' Installation"
+
+#: /var/centauri/tools/centauriweewx:435
+msgid "Uninstall '$DAT_NAME'"
+msgstr "'$DAT_NAME' deinstallieren"
+
+#: /var/centauri/tools/centauriweewx:445
+msgid "Please remove folder '%s' and user '%s' manually"
+msgstr "Bitte Verzeichnis '%s' und '%s' Benutzerkonto von Hand löschen"
+
+#: /var/centauri/tools/centauriweewx:447
+msgid "Please remove user '%s' manually"
+msgstr "Bitte '%s' Benutzerkonto von Hand löschen"
+
+#: /var/centauri/tools/centauriweewx:488
+msgid "Please specify the '$DAT_NICK' URL to use"
+msgstr "Bitte die anzuzeigende '$DAT_NICK' URL angebeben"
+
+#: /var/centauri/tools/centauriweewx:494
+msgid "Neither 'centaurilauncher' nor 'x-www-browser' found"
+msgstr "Weder 'centaurilauncher' noch 'x-www-browser' gefunden"
+
+#: /var/centauri/tools/centauriweewx:556
+msgid "Web server base folder   (default: $DAT_HTML)"
+msgstr "Web Server Wurzel Verz.   (Vorgabe: $DAT_HTML)"
+
+#: /var/centauri/tools/centauriweewx:557
+msgid "specify a different user (default: $DAT_USER)"
+msgstr "Diesen Benutzer verwenden (Vorgabe: $DAT_USER)"
+
+#: /var/centauri/tools/centauriweewx:558
+msgid "Version to be installed  (default: $DAT_VERS)"
+msgstr "Zu installierende Version (Vorgabe: $DAT_VERS)"
+
+#: /var/centauri/tools/centauriweewx:561
+msgid "behaviour of service '$DAT_SERV'"
+msgstr "Verhalten von Dienst '$DAT_SERV'"
+
+#: /var/centauri/tools/centauriweewx:562
+msgid "install build dependencies"
+msgstr "Build-Umgebung einrichten"
+
+#: /var/centauri/tools/centauriweewx:563
+msgid "install '$DAT_NICK'"
+msgstr "Installiere '$DAT_NICK'"
+
+#: /var/centauri/tools/centauriweewx:564
+msgid "run the '$DAT_NICK' binary ${DAT_EXEC##*/}"
+msgstr "'$DAT_NICK' Programm '${DAT_EXEC##*/}' ausführen"
+
+#: /var/centauri/tools/centauriweewx:565
+msgid "[internal] called by 'install' and 'upgrade'"
+msgstr "[intern] aufgerufen durch 'install' und 'upgrade'"
+
+#: /var/centauri/tools/centauriweewx:566
+msgid "open a shell as user '$DAT_USER'"
+msgstr "Eine Shell für Benutzer '$DAT_NAME' starten"
+
+#: /var/centauri/tools/centauriweewx:567
+msgid "uninstall '$DAT_NICK'"
+msgstr "Deinstalliere '$DAT_NICK'"
+
+#: /var/centauri/tools/centauriweewx:568
+msgid "upgrade '$DAT_NICK'"
+msgstr "Aktualisiere '$DAT_NICK'"
+
+#: /var/centauri/tools/centauriweewx:569
+msgid "show '$DAT_NICK' web interface"
+msgstr "Starte die '$DAT_NICK' Web Anzeige"
+
+#: /var/centauri/tools/centauriweewx:571 /var/centauri/tools/centauriweewx:572
+msgid "run "
+msgstr "Starte "
+
+#: /var/centauri/tools/centauriweewx:573 /var/centauri/tools/centauriweewx:574
+msgid "... "
+msgstr "...    "
+
+#: /var/centauri/tools/centauriweewx:577
+msgid "one of: on off status"
+msgstr "Eines von: on off status"
+
+#: /var/centauri/tools/centauriweewx:578
+msgid "Linux user name"
+msgstr "Linux Benutzername"
+
+#: /var/centauri/tools/centauriweewx:579
+msgid "something like 'http://your-host'"
+msgstr "Etwas in der Art 'http://mein-rechner'"
+
+#: /var/centauri/tools/centauriweewx:580
+msgid "'$DAT_NICK' version to install"
+msgstr "Zu installierende $DAT_NICK Version"
+
+#: /var/centauri/tools/centauriweewx:583
+msgid "The installation process is run with a simple command:"
+msgstr "Die Installation erfolgt durch ein einfaches Kommando:"
+
+#: /var/centauri/tools/centauriweewx:587
+msgid "Do a release upgrade (via pip) and restart:"
+msgstr "Version aktualisieren (mit Pip) und Neustart:"
+
+#: /var/centauri/tools/centauriweewx:591
+msgid "To start '$DAT_NAME' at boot time as a service enter:"
+msgstr "Zum Starten von 'WeeWx' beim Boot foldendes eingeben:"
+
+#: /var/centauri/tools/centauriweewx:593
+msgid "enable service"
+msgstr "Dienst automatisch starten"
+
+#: /var/centauri/tools/centauriweewx:594
+msgid "disable service"
+msgstr "Dienst nicht automatisch starten"
+
+#: /var/centauri/tools/centauriweewx:596
+msgid "Action 'autorun' also creates or removes the '${DAT_ENAB##*/}' file"
+msgstr "Aktion 'autorun' erstellt oder löscht auf die '${DAT_ENAB##*/}' Datei,"
+
+#: /var/centauri/tools/centauriweewx:597
+msgid "that is checked by the service as a start condition."
+msgstr "die als Startbedingung für den Dienst fungiert."
+
+#: /var/centauri/tools/centauriweewx:601
+msgid "Run 'centaurisysinit default $DAT_NAME' if you want your machine to"
+msgstr "Starte 'centaurisysinit default $DAT_NAME' wenn dein Recher im Kiosk-"
+
+#: /var/centauri/tools/centauriweewx:602
+msgid "start in kiosk mode with $DAT_NAME web interface at boot time."
+msgstr "Modus starten und dabei '$DAT_NAME web' ausführen soll."

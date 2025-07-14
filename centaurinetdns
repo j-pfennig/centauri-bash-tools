@@ -1,0 +1,287 @@
+#!/usr/bin/bash
+# ------------------------------------------------------------------------------
+
+CEN_LEGAL="Dr. Jürgen Pfennig (c) 2024-2025; This code is under BSD-License"
+CEN_TITLE="Synchronize Samba AD/DC DNS with NSS data"
+
+# Import the bash library, set mix/max arguments
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -i -r -y - '0.03:4' 0 + || exit 2
+
+# Data
+CEN_OPT_PASSWORD=           # see --password
+CEN_OPT_REVERS=             # see --revers
+
+DAT_PASSWORD='Administrator'
+DAT_ZONE_BASE=
+DAT_ZONE_CURR=
+DAT_ZONE_LIST=()
+DAT_ZONE_RMAP=[]
+DAT_ADDR_BASE=
+DAT_ADDR_BHIG=
+
+DAT_SECRET="$CEN_ROOT/secrets/samba_admin"
+
+# ------------------------------------------------------------------------------
+# get password from cifs style secrets file: <vsec>
+# ------------------------------------------------------------------------------
+get_secret() {
+    local pasw
+    if [ -n "$CEN_OPT_PASSWORD" ] || [ ! -r "$DAT_SECRET" ] ; then
+        password -x -u "$DAT_PASSWORD" -m 4 -l pasw "$CEN_OPT_PASSWORD" || quit
+        DAT_PASSWORD+="%$pasw" ; return
+    fi
+    while read pasw ; do
+        [ "${pasw::9}" = 'password=' ] || continue
+        DAT_PASSWORD="smbadmin%${pasw:9}" ; return
+    done <"$DAT_SECRET" ; quit
+}
+
+# ------------------------------------------------------------------------------
+# Set current zone, create if needed, get records: <subn>
+# ------------------------------------------------------------------------------
+add_zone() {
+    local item name rtyp
+
+    # remove extra records from current zone
+    if [ -n "$DAT_ZONE_CURR" ] ; then
+        [ "$DAT_ZONE_CURR" = "$CEN_NET_DOMAIN" ] && rtyp='A' || rtyp='PTR'
+        for item in "${!DAT_ZONE_RMAP[@]}" ; do
+            name="${DAT_ZONE_RMAP["$item"]}"
+            [ "${name:--}" = '-' ] && continue
+            if [ "$rtyp" = 'A' ] ; then
+                filter -- "$item" || continue
+                confirm -a -n -q -f "Delete extra host (%-10s %s)" "$item" "$name" || continue
+            else
+                filter -- "${name%%.*}" || continue
+                confirm -a -n -q -f "Delete extra IPv4 (%s %-3s)" "$name" "$item" || continue
+            fi
+            run_tool + dns delete "$DAT_ZONE_CURR" "$item" "$rtyp" "$name" || return 1
+        done
+    fi
+
+    # get zone name
+    case "${1:--}" in
+    -)  return 0 ;;
+    +)  DAT_ZONE_CURR="$CEN_NET_DOMAIN" ; rtyp='A' ;;
+    *)  DAT_ZONE_CURR="$1.$DAT_ZONE_BASE.in-addr.arpa" ; rtyp='PTR'
+    esac
+
+    # create if needed ...
+    if listsearch -i DAT_ZONE_LIST -- "$DAT_ZONE_CURR" ; then
+        message -h -c "Zone (existing)" "$DAT_ZONE_CURR"
+    else
+        message -h -c "Zone (creating)" "$DAT_ZONE_CURR"
+        run_tool - dns zonecreate "$DAT_ZONE_CURR"
+    fi
+    error -t || return 1
+
+    # fill zone map with
+    unset DAT_ZONE_RMAP ; declare -g -A DAT_ZONE_RMAP
+    local _lst _wrd nent=0 last #suff
+    run_tool _lst dns query "$DAT_ZONE_CURR" @ "$rtyp"
+    for item in "${_lst[@]}" ; do
+        splitjoin -s _wrd -d ' ,\t' -- "$item"
+        case "$_wrd" in
+        Name=*) name="${_wrd#*=}" ; name="${name,,}" ;;     # make lowercase
+        $rtyp:) if [ -n "$name" ] ; then
+                    if [ "$rtyp" = 'A' -a "$last" = "$name" ] ; then
+                        continue                            # use 1st record only
+                    else
+                        suff= ; last="$name"
+                    fi
+                    DAT_ZONE_RMAP["$name"]="${_wrd[1]}" ; ((nent += 1))
+                fi ;;
+        esac
+    done
+    trace -a -c "Zone entries" "$nent ($DAT_ZONE_CURR)"
+
+    error -t                                # return status
+}
+
+# ------------------------------------------------------------------------------
+# Add record to current zone: <type> <name> <data>
+# ------------------------------------------------------------------------------
+add_record() {
+    local rtyp="$1" ; shift
+    local cptr="${DAT_ZONE_RMAP["$1"]}"
+    if [ "$2" = "$cptr" ] ; then
+        $CEN_TRACE2 -a -c "Record exists" "$1" "$cptr"
+    elif [ "$cptr" = '-'  ] ; then
+        trace -a -c "Record duplicate" "$1" "++ $2"
+    elif [ -n "$cptr"  ] ; then
+        trace -a -c "Record changed" "$1" "$cptr -> $2"
+        confirm -a -n -q -f "Add host (%-10s %s)" "$2" "$1" || return 0
+        run_tool - dns update "$DAT_ZONE_CURR" "$1" "$rtyp" "$cptr" "$2" || return 1
+    else
+        trace -a -c "Record is new" "$1" "$2"
+        confirm -a -n -q -f "Add IPv4 (%-10s %s)" "$2" "$1" || return 0
+        run_tool - dns add "$DAT_ZONE_CURR" "$1" "$rtyp" "$2" || return 1
+    fi
+    DAT_ZONE_RMAP["$1"]='-'                 # valid, do not delete
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# Add a list of 'A' records: (<alow> <host>)...
+#
+#       alow    lower 16 bits of ipv4 address
+#       host    host name (not qualified)
+# ------------------------------------------------------------------------------
+add_hosts() {
+    local name wrds addr
+    while [ "$#" -gt 0 ] ; do
+        splitkeyval "$1" addr name ' ' ; shift
+        filter -- "$name" || continue
+        add_record 'A' "$name" "$DAT_ADDR_BHIG$addr"
+    done
+}
+
+# ------------------------------------------------------------------------------
+# Run samba-tool: <ares>|-|+ <cmd> <subcmd> <arg>...
+#
+#       <ares>  save samba-tool output to array
+#       -       just run, display errors
+#       +       quiet, ignore errors
+# ------------------------------------------------------------------------------
+run_tool() {
+    local vnam="$1" ; shift
+    local mcmd="$1" ; shift
+    local scmd="$1" ; shift
+
+    local ropt
+    listsearch -- "$scmd" 'list' 'zonelist' 'query' && ropt='-r'
+
+    export USER="$DAT_PASSWORD"
+    set -- "$mcmd" "$scmd" 'localhost' "$@" -U "${DAT_PASSWORD%\%*}"
+    if [ "$vnam" = '-' ] ; then
+        system $ropt -e -p 'samba-tool' "$@" && return 0
+    elif [ "$vnam" = '+' ] ; then
+        system $ropt -q 'samba-tool' "$@" && return 0
+    else
+        system $ropt -a "$vnam" -e -p 'samba-tool' "$@" && return 0
+    fi
+    [ -n "$ropt" ] && return 0                  # return true for dryrun
+    dryrun
+}
+
+# ------------------------------------------------------------------------------
+#
+# ------------------------------------------------------------------------------
+run() {
+    context -r
+    netconfig -f
+    netquery PRIMARY || quit "This tool must be run at primary server"
+    get_secret
+
+    local subn subl
+    DAT_ADDR_BASE="${CEN_NET_NETWORKS%/*}"
+    DAT_ADDR_BHIG="${DAT_ADDR_BASE%.*.*}"
+    splitkeyval "$DAT_ADDR_BHIG" subn subl '.'
+    DAT_ZONE_BASE="$subl.$subn"
+    DAT_ADDR_BHIG+='.'
+
+    # get list of zones known to samba
+
+    local addr curr list item wrds name host
+    run_tool list dns zonelist
+    for item in "${list[@]}" ; do
+        [[ "$item" == *pszZoneName* ]] || continue
+        item="${item#* : }"
+        if [ "$item" = "$CEN_NET_DOMAIN" ] ; then
+            trace -a -c "Domain   Zone" "$item"
+        else
+            trace -a -c "Existing Zone" "$item"
+        fi
+        DAT_ZONE_LIST+=("$item")
+    done
+    message -h -c "DNS zone count" "${#DAT_ZONE_LIST[@]}"
+
+    # get list of hosts known to nss
+
+    system -r -a list -- getent hosts
+    txtgrep -a list -i list -y "$DAT_ADDR_BHIG*"
+    local data=() hlst=()
+    for item in "${list[@]}" ; do
+        splitjoin -s wrds -d " \t" -- "$item"
+
+        # check address and domain
+        addr="${wrds[0]#$DAT_ADDR_BHIG}"
+        [ "$addr" = "${wrds[0]}" ] && continue
+        name="${wrds[1]%.$CEN_NET_DOMAIN}"
+        [ "$name" = "${wrds[1]}" ] && continue
+        $CEN_TRACE2 -a -c "Host entry" "$addr $name"
+
+        # the 1st byte adds to the DNS sub-zone, the rest is record name
+        splitkeyval "$addr" subn subl '.'
+        printf -v item '%-3s %-3s %s' "$subn" "$subl" "$name"
+        data+=("$item") ; hlst+=("$addr $name")
+
+        # process alias names
+        for name in "${wrds[@]:2}" ; do
+            host="${name%.$CEN_NET_DOMAIN}"
+            [ "$name" = "$host" ] && continue           # not qualified
+            $CEN_TRACE2 -a -c "Host alias" "$addr $host"
+            printf -v item '%-3s %-3s %s' "$subn" "$subl" "$host"
+            data+=("$item") ; hlst+=("$addr $host")
+        done
+    done
+
+    #splitjoin -l -s - -i hlst ; quit
+
+    # flush zones, sort, add 'A' records for hosts
+    message -h -c "Hosts in NSS" "${#data[@]}"
+    add_zone '+' || return
+    txtsort -n -i data -a data
+    txtsort -n -i hlst -a hlst
+    message -h -c "Hosts in DNS" "${#DAT_ZONE_RMAP[@]}"
+    add_hosts "${hlst[@]}" || return
+
+    for item in "${data[@]}" ; do
+        splitjoin -s wrds -d " \t" -- "$item"
+        subn="${wrds[0]}" ; addr="${wrds[1]}" ; name="${wrds[2]}"
+        if [ "$subn" != "$curr" ] ; then
+            curr="$subn"
+            add_zone "$subn" || break
+        fi
+        filter -- "$name" || continue
+        add_record 'PTR' "$addr" "$name.$CEN_NET_DOMAIN" || break
+    done
+
+    add_zone                                # purge deleted from current zone
+}
+
+# ------------------------------------------------------------------------------
+# option parsing: <option> <argument>
+# ------------------------------------------------------------------------------
+options() {
+
+    case "$1" in
+
+ #   -R|--revers)
+ #       optarg 'revert'     -              ;;          # flag
+    -P|--pas*)
+         optarg 'password'  -           -t  ;;          # text
+
+    esac
+}
+
+# ------------------------------------------------------------------------------
+# print usage info
+# ------------------------------------------------------------------------------
+usage() {
+    usageset -t "This is a batch tool to add IP addresses from DNS to the AD/DC DNS." \
+             -t "It creates DNS zones and adds or deletes PTR records as needed." \
+             -t - \
+             -t "See \"centaurikerberos dns ...\" for non-batch use." \
+             -o - \
+             -o '-P --password' "'Administrator' password ('-' to prompt)" \
+             -e ". -i peter     # add all peter* IP addresses" \
+
+}
+
+# ------------------------------------------------------------------------------
+# Finally call the library to execute the script
+# ------------------------------------------------------------------------------
+main "$@" ; quit
+
+# the end
