@@ -304,7 +304,7 @@ iface wlan0 inet dhcp
         fi
     fi
 
-    if ___setup '/var/centauri/configs' "Install centauri-tools ($DAT_NICK)" ; then
+    if ___setup "$CEN_ROOT/configs" "Install centauri-tools ($DAT_NICK)" ; then
         local dlib dtoo dver="$CEN_ROOT/configs/$DAT_NICK/@admin"
         folder -s DAT_TEMPDIR -m "$CEN_OPT_BASE/tmp/${CEN_NAME}_$$"
         folder -s dlib -m "$DAT_TEMPDIR/library"

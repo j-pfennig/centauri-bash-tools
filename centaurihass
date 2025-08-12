@@ -11,7 +11,8 @@ CEN_TITLE=$"Tool to (un)install and run HomeAssistant Core"
 # ------------------------------------------------------------------------------
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m con -o -s -t -y - '0.25:5' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m con -o -s -t -y \
+                    'centaurihass' '0.26:5' || exit 2
 
 # configurable data, see default file
 DAT_NICK='HomeAssistant'                # friendly product name
@@ -35,20 +36,24 @@ DAT_QUIRKS=('|certbot'                  # 0 post-install
             ''                          # 2
            )
 
+# started as an appliance?
+[ "${BASH_ARGV0##*/}" = '.centauristartup' ] && set -- --quiet web
+
 # nothing configurable below ...
+
 if [ -n "$CEN_PACKAGE" ] ; then         # packaged script...
-    # to be sourced instead of /etc/default/$CEN_NAME
-    CEN_DEFAULTS="$CEN_ROOT/$CEN_NAME.default"
+    # file to be sourced instead of /etc/default/$CEN_NAME
+    CEN_APPCONF="$CEN_ROOT/$CEN_NAME.default"
     # in a packaged script CEN_ROOT is the base folder of the script
     # source. Here we replace it with the base folder path ...
     CEN_ROOT="$DAT_BASE"
-    DAT_HOME="$CEN_ROOT/home"           # config/transient data
+    DAT_HOME="$CEN_ROOT/home"           # config and transient data
     TEXTDOMAINDIR="$CEN_ROOT/locale"
     embed -c '_centauri_bash_atr'       # dependencies ...
     embed -c '_centauri_bash_cfm'
     embed -c '_centauri_bash_utl'
 else                                    # shared script ...
-    DAT_HOME="$CEN_ROOT/home/$DAT_USER" # config/transient data
+    DAT_HOME="$CEN_ROOT/home/$DAT_USER" # config and transient data
 fi
 
 # optional: service file provided by centauri-bash-lib
@@ -475,8 +480,7 @@ actionSetup() {
     vers_quirk
 
     local slnt cpip="$1" ; [ -n "$CEN_OPT_SILENT" ] && slnt='-q'
-    local what="$DAT_NAME" ; [ "${DAT_HAVER:--}" = '-' ] || what+="==$DAT_HAVER"
-
+    local what="$DAT_NAME"
     if [ "$1" = 'install' ] ; then
         venv_setup -c || return
         # do not use the cached path of distro python
@@ -490,10 +494,12 @@ actionSetup() {
             message -i "    sudo ${0##*/} --version='$DAT_HAVER' install"$'\n'
         fi
         confirm -y -f $"Continue to install '%s'" "$DAT_NICK" || return
+        [ "${DAT_HAVER:--}" = '-' ] || what+="==$DAT_HAVER"
         [ -n "$slnt" ] && progress -a -l -- $"Installing..."
      else
         venv_setup || return
         confirm -y -f $"Continue to upgrade %s" "$DAT_NICK" || return
+        [ "${CEN_OPT_VERSION:--}" = '-' ] || what+="==$CEN_OPT_VERSION"
         [ -n "$slnt" ] && progress -a -l -- $"Upgrading..."
         cpip='upgrade'
      fi
