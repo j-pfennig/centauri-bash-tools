@@ -4,7 +4,7 @@ CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2007-2025; BSD License"
 CEN_TITLE="Apply file-system security settings"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d - '0.45:6' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d - '0.47:6' || exit 2
 
 # data
 CEN_DONE=0                  # imply --zombie
@@ -202,14 +202,35 @@ actionHomes() {
 }
 
 # ------------------------------------------------------------------------------
+# Action links: -no args-
+# ------------------------------------------------------------------------------
+actionLinks() {
+    local item indx=0 list=() dest=() link
+    for item in /* /boot/* /mnt/* ; do
+        [ -h "$item" ] && list+=("$item")
+    done
+    resolve -a dest -l -- "${list[@]}"
+    for item in "${list[@]}" ; do
+        link="${dest[indx++]}"
+        [ "${link::1}" = '/' ] || continue      # is already relative
+        if [ ! -e "$item" ] ; then
+            warning "Stale symlink:" "$item  ->  $link"
+        else
+            remove -- "$item"
+            symlink -l -n -- "$link" "$item"
+        fi
+    done
+}
+
+# ------------------------------------------------------------------------------
 #
 # ------------------------------------------------------------------------------
 actionSystem() {
 
     # system dirs
-    system -e -p -n -- mkdir -p         /data /export /home /mnt "$CEN_ROOT"
+    system -e -p -n -- mkdir -p         /network /export /home /mnt "$CEN_ROOT"
 
-    attributes -o root:root -m 775      / /data /home /mnt /var
+    attributes -o root:root -m 775      / /network /home /mnt /var
     attributes -o root:wheel -m 775     /archive /export /shared /var/backups
     attributes -o root:root  -m 700 -d  "$APP_USER_ROOT"
     attributes -o root:root  -m 644     /etc/ssh/ssh_known_hosts /etc/ssh/ssh*.pub
@@ -267,22 +288,25 @@ actions() {
     case "$CEN_ACTION" in
 
     # after option parsing -  check if tools are installed
-    "")
+    '')
         system -c -f mkdir chmod chown id find ;;
 
     # actions go here...
     aut*)
-        invoke    "auto"       -            0 ;;
+        invoke    'auto'       -            0 ;;
     cro*)
-        invoke -r "cron"       actionSystem ; CEN_AUTOIND=
+        invoke -r 'cron'       actionSystem ; CEN_AUTOIND=
         invoke -r -            actionExport ; CEN_AUTOIND=
-        invoke -r -            actionHomes    ;;
+        invoke -r -            actionHomes  ; CEN_AUTOIND=
+        invoke -r -            actionLinks    ;;
     exp*)
-        invoke -r "export"     -            0 ;;
+        invoke -r 'export'     -            0 ;;
     hom*)
-        invoke -r "homes"      -            0 ;;
+        invoke -r 'homes'      -            0 ;;
+    lin*)
+        invoke -r 'links'      -            0 ;;
     sys*)
-        invoke -r "system"     -            0 ;;
+        invoke -r 'system'     -            0 ;;
 
     esac
 }
@@ -295,6 +319,7 @@ usage() {
        -a "auto           default user settings [default in .$CEN_NAME]"\
        -a "export         security settings for /export"\
        -a "homes          security settings for /home, run per-user .$CEN_NAME"\
+       -a "links          change some absolute symlinks to relative links" \
        -a "system         security setting for system files"\
        -a - \
        -a "cron           invoked via cron to run export/homes/system"

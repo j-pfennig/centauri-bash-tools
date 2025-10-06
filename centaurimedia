@@ -637,8 +637,8 @@ actionSystem() {
         case "$1" in
         ext4)   ext4=1 ;;
         nob*)   nump=2 ; parg='set 1 esp on' ; bios= ;;
-        leg*)   nump=2 ; parg='set 1 lba on' ; bios= ; ptyp='msdos' ; bfat='lfat' ;;
-        ras*)   nump=2 ; parg='set 1 lba on' ; bios= ; ptyp='msdos' ; bfat='rfat' ;;
+        leg*)   nump=2 ; parg='set 1 boot on' ; bios= ; ptyp='msdos' ; bfat='lfat' ;;
+        ras*)   nump=2 ; parg='set 1 boot on' ; bios= ; ptyp='msdos' ; bfat='rfat' ;;
         [0-9]*) size="$1" ;;
         *)      invoke -e - "$1"
         esac ; shift

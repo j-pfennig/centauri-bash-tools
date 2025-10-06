@@ -855,7 +855,6 @@ ${hoga}   netmask $mask
                 meth='nm'
             fi
         fi
-        message -i -c "address method" "$meth"
 
         # is centauriswitch registered is callback
         pswi="$DAT_ETCDIR/network/if-up.d/centauriswitch"
@@ -867,42 +866,26 @@ ${hoga}   netmask $mask
                 CEN_OPT_KEEP=1 ; return ;;
         static) ;;
         auto|nm|smart)
-                case "$CEN_OPT_NMAN" in
-                    0)  flgn=0 ;;
-                    1)  flgn=1 ;;
-                    *)  if [ "$meth" = 'nm' ] ; then flgn=1
-                        elif netquery 'nm' ;    then flgn=1
-                        else                         flgn=0
-                        fi
-                esac
-
-                # for the current host we can check if nm is installed as service
-                if [ "$flgn" = 1 ] && [ "$CEN_OPT_HOST" = "$HOSTNAME" ] ; then
-                    local mesg stat
-                    runservice test NetworkManager ; stat=$?
-                    if [ $((stat & 8)) != 0 ] ; then
-                        mesg="is disabled"
-                    elif [ $((stat & 2)) != 0 ] ; then
-                        mesg="is masked"
-                    elif [ "$stat" != 0 ] ; then
-                        mesg="not found"
-                    fi
-                    if [ -n "$mesg" ] ; then
-                        warning -a -p "Option 'nm' set but NetworkManager %s, %s" \
-                                      "$mesg" "fallback to 'simple'"
+                if netoption 'auto' "$CEN_OPT_HOST" || 'nm' "$CEN_OPT_HOST" ; then
+                    do_nmoption
+                    if [ "$?" = 0 -o "$?" = 2 ] ; then
+                        flgn=1
+                    else
                         flgn=0
+                        do_warning -w -a -p "Fallback to 'simple' network mode"
                     fi
                 fi
+
                 # message at setup
                 if [ "$flgn" = 1 ] ; then
                     suff='smart'; hth0='#' ; hla0='#'
-                else
-                    [ -z "$flgn" -a "$meth" != 'auto' ] &&
-                        warning -a "Option 'nm' not set," "fallback to 'simple'"
+                elif [ -z "$flgn" -a "$meth" != 'auto' ] ; then
+                    do_warning -w -a "Option 'nm' not set," "fallback to 'simple'"
                     suff='simple'
                 fi ;;
         *)      suff='simple'
         esac
+        message -i -c "address method" "$suff"
 
         # 'option sysdnames' with CEN_NET_IFNAMES=0
         if [ "$HOST_NAME" = "$CEN_OPT_HOST" ] ; then
@@ -1088,6 +1071,10 @@ do_interface_file() {
     else
         trace -a -c "writing" "${file/#.\//$PWD\/}"
         netfile -h -- "$file" && DAT_CREATED+=("$1")
+        if [ ! -h "${file%.*}" ] ; then
+            warning -p "Making file '%s' a symlink to '%s'" "${file%.*}" "${file##*/}"
+            symlink -m -n -- "${file##*/}" "${file%.*}"
+        fi
     fi
 }
 
@@ -1122,44 +1109,44 @@ do_metric() {
 #
 #       Return:     0 can use NM
 #                   1 do not use NM (disabled)
-#                   2 NM is not usable (masked or not installed)
+#                   2 unknown service state
+#                   3 NM is not usable (masked or not installed)
 # ------------------------------------------------------------------------------
 do_nmoption() {
-    if [ -n "$DAT_NMDIR" ] ; then                   # previous status ...
-        [ "$DAT_NMDIR" = '-' ] && return 2          # not usable
-        runservice enabled 'NetworkManager' && return 0 || return 1
+
+    # is it installed? Implement --nm option
+
+    if [ -n "$DAT_NMDIR" ] ; then                   # previous check ...
+        [ "$DAT_NMDIR" = '-' ] && return 3          # not usable
+    elif ! netquery -s DAT_NMDIR 'nm' ; then        # is it installed?
+        DAT_NMDIR='-' ; return 3
+    elif netoption 'nm' "$CEN_OPT_HOST" || netoption 'auto' "$CEN_OPT_HOST" ; then
+        _stat=0
+        if [ "$CEN_OPT_NMAN" = 0 ] ; then
+            do_warning $"NetworkManager disabled by '--nm=0'"
+            DAT_NMDIR='-' ; return 3
+        fi
+    elif [ "$CEN_OPT_NMAN" = 1 ] ; then
+        do_warning $"NetworkManager enforced by '--nm=1'"
+        return 0
     fi
 
-    local _disa _stat=1 _fail _nman="${1:-$CEN_OPT_NMAN}"
-    if netquery -s DAT_NMDIR 'nm' ; then            # is it installed?
-        runservice enabled 'NetworkManager' ; _stat="$?"
-        if ((_stat & 8 )) ; then                    # service is disabled
-          _stat=0 ; _disa=1
-        fi
-        if ((_stat & 2 )) ; then
-            _fail=$"is masked"
-        elif [ "$_stat" != 0 -a "$_stat" != 4 ] ; then
-            _fail=$"unusable (status $_stat)"
-        elif [ "$_nman" = 0 ] ; then
-            _fail=$"disabled by '--nm=0'"
-            _stat=2 ; _disa=
-        elif netoption 'nm' "$HOSTNAME" || netoption 'auto' "$HOSTNAME" ; then
-            _stat=0
-        elif [ "$_nman" = 1 ] ; then
-            _fail=$"enforced by '--nm=1'"
-            _stat=0 ; _disa=
-        fi
-    else
-        _fail=$"is not installed"
+    # get service status
+
+    [ "$CEN_OPT_OUTPUT" = '.' ] && return 2         # cannot get status
+    runservice enabled 'NetworkManager'
+    local _stat="$?"
+    if ((_stat & 8 )) ; then
+        return 1
+    elif ((_stat & 2 )) ; then
+        do_warning $"NetworkManager is masked"
+        DAT_NMDIR='-' ; return 3
+    elif [ "$_stat" != 0 ] ; then
+        do_warning $"NetworkManager not usable, status=""$_stat"
+        DAT_NMDIR='-' ; return 3
     fi
-    [ -n "$_fail" ] && invoke -w "NetworkManager $_fail"
-    [ -n "$_disa" ] && return 1
-    [ "$_stat" = 0 ] && return 0
-    DAT_NMDIR='-' ; return 2
+    return 0
 }
-
-# interfaces
-# network nm
 
 # ------------------------------------------------------------------------------
 # create connection: <name> <ifce> <host> [<ssid> <pasw>]
@@ -1326,6 +1313,22 @@ do_wakeonlan() {
 }
 
 # ------------------------------------------------------------------------------
+# warning if not silent: [-w] <args>...
+# ------------------------------------------------------------------------------
+do_warning() {
+    if [ -z "$CEN_OPT_SILENT" ] ; then
+        if [ "$1" = '-w' ] ; then
+            shift ; warning "$@"
+        else
+            invoke -w "$@"
+        fi
+    else
+        [ "$1" = '-w' ] && shift
+        trace "$@"
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # Get wpa_supplicant config: [-g] <vnam> [<name>]
 # ------------------------------------------------------------------------------
 do_wpa_check() {
@@ -1344,8 +1347,7 @@ do_wpa_check() {
     else
         conf="$dwpa/${DAT_WLAN_SSID,,}.conf"
     fi
-    [ -z "$CEN_OPT_SILENT" -a -z "$fgen" ] && [ ! -f "$conf" ] &&
-        invoke -w "No such WLAN config:" "$conf"
+    [ -z "$fgen" ] && [ ! -f "$conf" ] && do_warning "No such WLAN config:" "$conf"
     printf -v "$1" '%s' "$conf"
 }
 
@@ -1376,13 +1378,11 @@ actionDnsmasq() {
     # preconditions ...
     if netoption 'dhcp' "$host" || netoption 'dns' "$host" ; then
         if [ ! -f "$DAT_ETCDIR/dnsmasq.conf" ] ; then
-            [ -z "$CEN_OPT_SILENT" ] &&
-                invoke -w $"No configuration file:" "$DAT_ETCDIR/dnsmasq.conf"
+            do_warning $"No configuration file:" "$DAT_ETCDIR/dnsmasq.conf"
             return
         fi
     else
-        [ -z "$CEN_OPT_SILENT" ] &&
-            invoke -w $"Not configured (no 'option dhcp' or 'option dns')"
+        do_warning $"Not configured (no 'option dhcp' or 'option dns')"
         return
     fi
 
@@ -1439,8 +1439,7 @@ actionDnsmasq() {
 # ------------------------------------------------------------------------------
 actionHostapd() {
     if [ ! -d "$DAT_ETCDIR/hostapd" ] ; then
-        [ -n "$CEN_OPT_SILENT" ] && return
-        invoke -w "Missing folder:" "$DAT_ETCDIR/hostapd"
+        do_warning "Missing folder:" "$DAT_ETCDIR/hostapd"
         return
     fi
     netconfig -f                                    # load config or die
@@ -1610,15 +1609,14 @@ actionInterface() {
         :
     elif [ "$CEN_OPT_HOST" != "$HOSTNAME" ] &&
         netoption 'sysdnames' "$CEN_OPT_HOST" ; then
-        [ -z "$CEN_OPT_SILENT" ] && \
-            invoke -w "No 'option sysdnames', using 'bios' naming:" "$CEN_OPT_HOST"
+        do_warning "No 'option sysdnames', using 'bios' naming:" "$CEN_OPT_HOST"
         mode='bios'
     else
         netiface -k && mode='systemd' || mode='bios'
     fi
 
-    if [ -z "$CEN_OPT_SILENT" ] && [ ! -h "$DAT_ETCDIR/network/interfaces" ] ; then
-        invoke -w "Invalid setup ('%s' is not a symlink)" "$DAT_ETCDIR/network/interfaces"
+    if [ ! -h "$DAT_ETCDIR/network/interfaces" ] ; then
+        do_warning "Invalid setup ('%s' is not a symlink)" "$DAT_ETCDIR/network/interfaces"
     fi
 
     # write status file
@@ -1670,7 +1668,8 @@ actionList() {
 }
 
 # ------------------------------------------------------------------------------
-# Interface naming: [bios|sys|default]
+# Interface naming: [bios|sys|default|auto|status]
+# + initrd/boot     [initrd|menu]
 #
 # For the current host: - use the library detected mode
 #                       - give a warning if configuration differs
@@ -1695,7 +1694,7 @@ actionNaming() {
     netpath -p -- "$CEN_NAME"                   # persistent storage
     readline -a atag -i "$_netpath"
     if [ "${atag:-$CEN_OPT_HOST}" != "$CEN_OPT_HOST" ] ; then
-        warning -a "current interface config don't match host name:" "$atag"
+        do_warning "Current interface config don't match host name:" "$atag"
     else
         stag="${atag[2]}"
     fi
@@ -1709,7 +1708,7 @@ actionNaming() {
 
     # --- action to be taken ---
 
-    case "${1:-sta}" in
+    case "${1:-status}" in
     aut*)       mode="$want" ;;
     bio|bios)   mode='bios' ;;
     sys*)       mode='systemd' ;;
@@ -1728,10 +1727,14 @@ actionNaming() {
 
     ini*)       mini=1 ; mfil= ;;
     men|menu)   mmen=1 ; mfil= ;;
-    *)          invoke -e '%s\n            %s' "Argument must be one of:" \
-                          'status bios systemd default auto initrd menu'
+    *)          invoke -a - 'status|bios|systemd|default|auto|initrd|menu'
                 return
     esac
+
+### TODO not a symlink in /etc/network, bad option sysdnames (see cent8)
+### TODO auto: useless warning
+### TODO document cre|ini|menu
+### TODO menu not working (cent8)?
 
     # --- update mode ---
 
@@ -1744,21 +1747,21 @@ actionNaming() {
     fi
 
     if [ -n "$mini" -a "$CEN_OPT_HOST" != "$HOSTNAME" ] ; then
-        [ -z "$CEN_OPT_SILENT" ] && invoke -w "Can update initrd only for current host"
+        do_warning "Can update initrd only for current host"
         mini=
     elif [ "$stal" != "${mode:-$stal}" ] ; then
-        warning -a -p "Naming mode change to '%s' needs reboot to become effective" "$mode"
+        do_warning "Naming mode change to '%s' needs reboot to become effective" "$mode"
         mini=1 ; mmen=1
     fi
 
     case "$mini" in
     1)  confirm -y "Update initrd/UKI " || mini= ;;
-    2)  [ -z "$CEN_OPT_SILENT" ] && warning "Initrd may need to be updated" ;;
+    2)  do_warning -w -a "Initrd may need to be updated" ;;
     esac
 
     case "$mmen" in
     1)  confirm -y "Update boot config" || mmen= ;;
-    2)  [ -z "$CEN_OPT_SILENT" ] && warning "Boot config may need to be updated" ;;
+    2)  do_warning -w -a "Boot config may need to be updated" ;;
     esac
 
     # --- re-create interface files ---
@@ -1815,7 +1818,7 @@ actionNetman() {
     case "$1" in
     '')         ;;
     aut|auto)   do_nmoption
-                if [ $? -lt 2 ] ; then
+                if [ $? -le 2 ] ; then
                     netm=1 ; mode='NetworkManager'
                 else
                     netm=0 ; mode='ifup'
@@ -1838,10 +1841,13 @@ actionNetman() {
         return
     fi
     if [ "$netm" = 0 ] ; then
+        message -a "Mask nm services..."
         system -e -p systemctl mask "${serv[@]}"
         item='simple'
     elif [ "$netm" = 1 ] ; then
+        message -a "Unmask nm services..."
         system -e -p systemctl unmask "${serv[@]}"
+        message -a "Enable nm services..."
         system -e -p systemctl enable "${serv[@]}"
         item='smart'
     else
@@ -1859,10 +1865,8 @@ actionNetman() {
 # add NM system connections: [<ifce>]
 # ------------------------------------------------------------------------------
 actionNmconn() {
-    if ! netquery 'nm' ; then
-        [ -z "$CEN_OPT_SILENT" ] && invoke -w "NetworkManager is not installed"
-        return
-    fi
+    do_nmoption ; [ "$?" -le 2 ] || return          # can use nm?
+
     local mesg enet='eth0' wnet='wlan0' \
           host="${CEN_OPT_HOST:--}" ssid="${DAT_WLAN_SSID:--}"
     [ "$host" = '-' ] && host="$HOSTNAME"
@@ -1954,8 +1958,7 @@ interface $_netiface
 # ------------------------------------------------------------------------------
 actionSamba() {
     if [ ! -d "$DAT_ETCDIR/samba" ] ; then
-        [ -n "$CEN_OPT_SILENT" ] && return
-        invoke -w "Missing folder:" "$DAT_ETCDIR/samba"
+        do_warning "Missing folder:" "$DAT_ETCDIR/samba"
         return
     fi
     local file="$DAT_ETCDIR/samba/interfaces.conf" stat='interfaces.conf.static'
@@ -1979,8 +1982,7 @@ actionSamba() {
 # ------------------------------------------------------------------------------
 actionWpa() {
     if [ ! -d "$DAT_ETCDIR/wpa_supplicant" ] ; then
-        [ -n "$CEN_OPT_SILENT" ] && return
-        invoke -w "Missing folder:" "$DAT_ETCDIR/wpa_supplicant"
+        do_warning "Missing folder:" "$DAT_ETCDIR/wpa_supplicant"
         return
     fi
 

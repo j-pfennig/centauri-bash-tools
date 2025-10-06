@@ -4,7 +4,7 @@ CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2016-2025 BSD License"
 CEN_TITLE="Tool to manage btrfs volumes and snapshots"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -i -m bat -m win -s -y - '0.57:4' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -i -m bat -m win -s -y - '0.58:4' || exit 2
 
 # Data
 
@@ -207,7 +207,7 @@ snapshot_find() {
                 _snapshot_find="$root/$snap" ; return 0
             fi
             base="$root/Snapshots"
-            if [ "${sper:-all}" != "all" ] ; then
+            if [ "${sper:-all}" != 'all' ] ; then
                 snap="$base/$sper/$snam"
             else
                 snap="$base/monthly/$snam"
@@ -229,7 +229,7 @@ snapshot_find() {
 # check for snapshot folder: [-a] [-e] [-b base] [-s] [<period>]
 #
 # Options:
-#       -a allow "all" as period, use "all" as default
+#       -a allow 'all' as period, use 'all' as default
 #       -e error if <period> folder not existing>
 #       -s silent mode
 #
@@ -238,7 +238,7 @@ snapshot_folder() {
     while [ "${1::1}" = '-' ] ; do
       case "$1" in
       --)   shift ; break ;;
-      -a)   dflt="all" ;;
+      -a)   dflt='all' ;;
       -b)   shift ; base="$1" ;;
       -e)   smsg="error" ;;
       -s)   slnt=1 ;;
@@ -258,7 +258,7 @@ snapshot_folder() {
         wee*)       CEN_DAT_PERIOD="weekly" ;;
         mon*)       CEN_DAT_PERIOD="monthly" ;;
         *)          CEN_DAT_PERIOD=
-                    if [ "$dflt" != "all" -o "${1:-all}" != "all" ] ; then
+                    if [ "$dflt" != 'all' -o "${1:-all}" != 'all' ] ; then
                         invoke -e "<period> must be one of: daily weekly monthly"
                         return 1
                     fi
@@ -617,7 +617,7 @@ actionDelete() {
         wee*)       opts=("--level=1" "--folder=./weekly")  ; mage=32  ; shift ;;
         mon*)       opts=("--level=1" "--folder=./monthly") ; mage=124 ; shift ;;
         all)        opts=("--level=2") ; shift ;;
-        '+'|'-')    opts=("--level=2") ; peri="all"
+        '+'|'-')    opts=("--level=2") ; peri='all'
     esac
 
     archive_opts opts
@@ -1147,7 +1147,7 @@ actionShow() {
         mon*)       opts=("--level=1" "--folder=./monthly") ; shift ;;
         all)        opts=("--level=2") ; shift ;;
         vol*)       peri= ;;
-        '+'|'-')    opts=("--level=2") ; peri="all"
+        '+'|'-')    opts=("--level=2") ; peri='all'
     esac
 
     if [ -n "$peri" ] ; then                            # get snapshot info...
@@ -1181,7 +1181,7 @@ actionShow() {
         anam+=('-' "${2##*/}" "${2%/*}")
         return 1
     }
-    if [ "${peri:-all}" = "all" ] ; then
+    if [ "${peri:-all}" = 'all' ] ; then
         for root in "${CEN_DAT_ROOT[@]}" ; do
             walk -i -l 1 -r -f false -d ___show_vol -- "$root/Volumes"
         done
@@ -1229,7 +1229,7 @@ actionSnap() {
         folder -f -c "$CEN_DAT_DIR"                 # back to initial folder
         local svol="${farg##*/}" ; base="$CEN_DAT_ROOT/Volumes"
         [ "$svol" = "$farg" ] || base="${farg%/*}"
-        volume_name -c "$svol" || return ; svol="$_volume_name"
+        volume_name 'error' "$svol" || return ; svol="$_volume_name"
         if [ -d "$base" ] ; then
             if [ -d "$base/$svol" ] ; then
                 invoke -w "Already exists:" "$base/$svol" ; return
@@ -1295,8 +1295,8 @@ actionSize() {
     local root base aout slca="$LC_ALL" peri="$1" fltr anam=() sifs="$IFS"
     for root in "${CEN_DAT_ROOT[@]}" ; do
         base="$root/Snapshots"
-        if [ "${peri::3}" = "vol" ] ; then
-            fltr="Volumes/*"
+        if [ "${peri::3}" = 'vol' ] ; then
+            fltr='Volumes/*'
         else
             snapshot_folder -a -b "$base" -s -- "$peri" || continue
             [ -n "$CEN_DAT_PERIOD" ] && fltr="Snapshots/$CEN_DAT_PERIOD/*"

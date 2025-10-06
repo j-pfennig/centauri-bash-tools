@@ -38,7 +38,7 @@ export PATH="$CEN_TOOLS:$PATH"
 default_hourly() {
     ### update private repositories
     [ -e "$CEN_ROOT/machines/rsyncd.conf" ] &&
-        execute -r 4 -s 3 centaurimachines -U -s
+        execute -r 4 -s 3 centaurimachines -U -s -N bookworm -N trixie
 
     if [ "$DAT_ROLE" != 'UNKNOWN' ] ; then
 

@@ -15,7 +15,7 @@ CEN_SVC_SHORT="Interface/Route Configuration"
 ### END INIT INFO
 
 # Import the bash library, set name and version
-PATH+=":/usr/local/bin:${0%/*}" . _centauri_bash_lib -a -d -f -v - '0.46:6' || exit 2
+PATH+=":/usr/local/bin:${0%/*}" . _centauri_bash_lib -a -d -f -v - '0.47:6' || exit 2
 
 # don't run as a service if centauriswitch is active
 inhibit "Inhibited by centauriswitch"
@@ -210,21 +210,17 @@ do_address() {
 # When <conf> is set the 'open/close/dial/hangup' actions are allowed.
 # -----------------------------------------------------------------------------
 do_cmdline() {
-    DAT_SWITCH_MODE=
-    DAT_SWITCH_CONF=
-    local line larg conf
+    local wrds word conf
     if override -r 'centauiswitch' DAT_SWITCH_MODE ; then
         invoke -w "Using 'centauiswitch=$DAT_SWITCH_MODE' from override file"
     elif [ -n "$1$2" ] ; then
         DAT_SWITCH_MODE="$1"
         DAT_SWITCH_CONF="$2"
     else
-        read -a larg </proc/cmdline
-        for line in "${larg[@]}" ; do
-            if [ "${line::15}" = 'centauriswitch=' ] ; then
-                DAT_SWITCH_MODE="${line:15}" ; break
-            fi
-        done
+        readline -e -a wrds -i '/proc/cmdline'  # get the boot parameters
+        listsearch -g -m word -i wrds -- 'centauriswitch=*'
+        DAT_SWITCH_MODE="${word:15}"
+        DAT_SWITCH_CONF=
     fi
 
     # check for <mode>:<conf>
@@ -239,15 +235,19 @@ do_cmdline() {
 
     # check mode
     case "$DAT_SWITCH_MODE" in
-    '')         message -a "Network mode not set, see 'centauiswitch=<mode>'" ; return 1 ;;
-    dis*)       DAT_SWITCH_MODE='disabled' ;;
-    sta*)       DAT_SWITCH_MODE='static'   ; conf=0 ;;
-    sim*)       DAT_SWITCH_MODE='simple'   ; conf=0 ;;
-    sma*)       DAT_SWITCH_MODE='smart'    ; conf=0 ;;
-    swi*)       DAT_SWITCH_MODE='switch'   ; conf=1 ;;
-    rou*)       DAT_SWITCH_MODE='router'   ; conf=1 ;;
-    *)          DAT_SWITCH_CONF= ; conf=2
+    '')     message -a "Network mode not set, see 'centauiswitch=<mode>'" ; return 1 ;;
+    dis*)   DAT_SWITCH_MODE='disabled' ;;
+    man*)   DAT_SWITCH_MODE='manual' ;;
+    sta*)   DAT_SWITCH_MODE='static' ; conf=0 ;;
+    sim*)   DAT_SWITCH_MODE='simple' ; conf=0 ;;
+    sma*)   DAT_SWITCH_MODE='smart'  ; conf=0 ;;
+    swi*)   DAT_SWITCH_MODE='switch' ; conf=1 ;;
+    rou*)   DAT_SWITCH_MODE='router' ; conf=1 ;;
+    ext*)   DAT_SWITCH_MODE='switch' ; conf=1 ; DAT_SWITCH_CONF='extender' ;;
+    rep*)   DAT_SWITCH_MODE='router' ; conf=1 ; DAT_SWITCH_CONF='repeater' ;;
+    *)      DAT_SWITCH_CONF= ; conf=2
     esac
+    trace -a -c '+' "Network mode=$DAT_SWITCH_MODE  conf=$DAT_SWITCH_CONF"
 
     if [ -z "$conf" -a -n "$DAT_SWITCH_CONF" ] ; then
         conf=2
@@ -255,7 +255,7 @@ do_cmdline() {
         [ -n "$DAT_SWITCH_CONF" ] || DAT_SWITCH_CONF="$DAT_SWITCH_MODE"
     fi
     if [ "$conf" = 2 ] ; then
-        error "Invalid argument:" "centauriswitch=$DAT_SWITCH_MODE${DAT_SWITCH_CONF:+:}$DAT_SWITCH_CONF"
+        error "Invalid kernel argument:" "centauriswitch=$DAT_SWITCH_MODE${DAT_SWITCH_CONF:+:}$DAT_SWITCH_CONF"
         DAT_SWITCH_CONF= ; return 1
     fi
 

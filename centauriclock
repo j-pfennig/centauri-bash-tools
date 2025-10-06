@@ -1,12 +1,17 @@
 #!/usr/bin/bash
 # ------------------------------------------------------------------------------
 CEN_LEGAL="Dr. J. Pfennig (c) 2024-2025; all rights reserved"
-CEN_TITLE=$"An extendable HTML based Day-Time-Clock"
+CEN_TITLE=$"An extendable HTML based Day-Time-Clock and Temperature Display"
 
 # Import the bash library
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -g -o 'centauriclock' '0.16:5' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -g -o 'centauriclock' '0.17:5' || exit 2
 
 #context -v 2                       # debug output
+
+# raspi display rotation
+
+DAT_RASPI_DSI=('10-0045')                 # list of backlight drivers
+DAT_RASPI_PTR='Virtual Core Pointer'      # name for xinit set-prop
 
 # Options and data
 
@@ -25,7 +30,7 @@ DAT_UNCLUTTER=
 
 if [ "${BASH_ARGV0##*/}" = '.centauristartup' ] ; then
     CEN_OPT_BASE='-' ;  CEN_OPT_TIMER=1
-    [ $# = 0 ] && set -- run --gui=0
+    [ $# = 0 ] && set -- run --quiet --gui=1
 fi
 
 DAT_BASEDIR="~/.local/$CEN_NAME"    # defaults ...
@@ -33,7 +38,8 @@ DAT_HTMLTXT="$CEN_NAME.html"
 
 # We prefer a tabular font and googles's 'noto' is the best known.
 # If it is installed on this computer we can safely use 10vw size...
-if [ -d '/usr/share/fonts/truetype/noto' ] ; then
+if [ -d '/usr/share/fonts/truetype/noto' ] ||
+   [ -f '/usr/share/fonts/truetype/centauri/NotoSans-Regular.ttf' ] ; then
     DAT_SIZEPNT='10vw'              # 'noto' font is smaller than others
 # other fonts tend to renders larger ...
 else
@@ -279,7 +285,7 @@ function updateClock() {
                line2 = date + ' ' + line2 + ' ' + year; break;
     default:  line1 = dayNames[day];
               month = (month < 9) ? '0' + (month+1) : month + 1;
-              data = (date < 10) ? '0' + date : date;
+              date = (date < 10) ? '0' + date : date;
               line2 = year + '-' + month + '-' + date;
   }
 
@@ -355,7 +361,7 @@ if (centauriclock_data == '') {
 }
 
 // main script part ...
-updateClock();
+updateClock(); last_minutes=99;
 setInterval(updateClock, 1000);
 
 </script></body>
@@ -379,14 +385,28 @@ actionHtml() {
 actionRun() {
     export XDG_CURRENT_DESKTOP=xinit
 
-    # detect raspberry pi display (old version)
-    if [ -z "$CEN_OPT_INVERT" -a -e '/sys/class/backlight/10-0045/brightness' ] ; then
-        CEN_OPT_INVERT=1
-        message -a $"Assuming input coordinates to be inverted"
-    fi
+    # handle raspi dsi display rotation
+    if [ "$CEN_OPT_INVERT" != 0 ] ; then
+        CEN_OPT_INVERT=0
+        embed -b -n "$CEN_PERSISTENT/xinit-rotate"
+        if [ "$ROTATE_ID" = '-' ] ; then
+            trace "DSI rotation disabled by configuration"
+        elif [ -n "$ROTATE_ID" ] ; then
+            trace "DSI rotation enabled:" "$ROTATE_ID"
+            CEN_OPT_INVERT=1
+        else
+            local rdsi
+            for rdsi in "${DAT_RASPI_DSI[@]}" ; do
+                [ -e "/sys/class/backlight/$rdsi/brightness" ] || continue
+                trace "DSI rotation for display:" "$rdsi"
+                CEN_OPT_INVERT=1 ; break
+            done
+        fi
 
-    [ "$CEN_OPT_INVERT" = 1 ] && sysrun -e xinput set-prop 'Virtual Core Pointer' \
-                                'Coordinate Transformation Matrix' 0 -1 1  0 -1 1  0 0 1
+        if [ "$CEN_OPT_INVERT" = 1 ] ; then
+            xinput set-prop "$ROTATE_ID" "$DAT_RASPI_PTR" 0 -1 1  0 -1 1  0 0 1
+        fi
+    fi
 
     if system -c unclutter ; then
         # beware: only system() can be used in a sub-shell
@@ -425,7 +445,7 @@ actionRun() {
     [ -n "$CEN_OPT_EXEC" ] && DAT_STARTUP="$CEN_OPT_EXEC"
 
      # without --exec the startup tool is optional
-    if PATH=".:$PATH" system -c "$DAT_STARTUP" ; then
+    if PATH=".:$PATH" system -c -- "$DAT_STARTUP" ; then
         trace -a -c $"Run startup tool" "$DAT_STARTUP"
     elif [ -z "$CEN_OPT_EXEC" ] ; then      # no startup skript ...
         DAT_STARTUP='false'
@@ -552,9 +572,16 @@ usage() {
         -a 'timer'               $"used by brightness timer to run 'centauripower'" \
 
     usageset \
-        -t $"Action \"run\" executes <tool> at startup (if existing). This is used to" \
-        -t $"initialize the environment. If <tool> returns an error execution stops." \
-        -t $"" \
+        -t $"If the script file \"$DAT_BASEDIR/$CEN_NAME.js\" exists" \
+        -t $"it get loaded by the internal HTML-code. The scipt either contains tem-" \
+        -t $"perature data to be displayed or a URL that points to a CORS enabled web" \
+        -t $"server that provides the data." \
+        -t - \
+        -t $"Action \"run\" executes <tool> at startup (if existing). This is intended to" \
+        -t $"start a background data provider process updating \"$CEN_NAME.js\". If" \
+        -t $"<tool> returns an error code > 1 clock terminates. At regular temination" \
+        -t $"the clock will try to kill child processes to stop the data provider." \
+        -t - \
         -t $"A non-existing \"$DAT_BASEDIR\" is ignored, using \"--base=-\"" \
         -t $"would initialize the folder. Option \"--timer=on\" causes the clock to"\
         -t $"run in background. In appliance mode \"--base=-\" and \"--timer=on\" are" \

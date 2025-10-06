@@ -1,60 +1,79 @@
 #!/usr/bin/bash
 # ------------------------------------------------------------------------------
 CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2017-2025; BSD License"
-CEN_TITLE="Restore a centauribackup, optionally cloning an existing machine"
+CEN_TITLE=$"Restore a centauribackup, optionally rename an existing machine"
 
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -m bat -r -y - '0.61:4' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -m bat -m con -r -t -y - '0.61:6' || exit 2
 
 # Options
 
-CEN_FLG_ALL=            # see --all
-CEN_FLG_BOOT=           # see --boot
-CEN_FLG_CLONE=()        # see --clone
-CEN_FLG_DIST=           # see --dist
-CEN_FLG_LABEL=          # see --label
-CEN_FLG_MKFS=           # see --format
-CEN_FLG_EXTFS=          # ext3=3 ext4=4 default=brtfs
-CEN_FLG_PART=           # root partition, see --partion
-CEN_FLG_SWAP=           # swap partition, see --swap
-CEN_FLG_GRUB=
-CEN_FLG_IMAGE=          # use image file, see --image
-CEN_FLG_MOUNT=          # mount point,    see --mount
-CEN_FLG_REST=
-CEN_FLG_UNMOUNT=
+CEN_OPT_BOOT=           # see --boot
+CEN_OPT_CLONE=          # see --clone
+CEN_OPT_DIST=           # see --dist
+CEN_OPT_LABEL=          # see --label
+CEN_OPT_FORMAT=         # fs2fs|ext4 default=brtfs
+CEN_OPT_PART=           # root partition, see --partion
+CEN_OPT_SWAP=           # swap partition, see --swap
+CEN_OPT_GRUB=
+CEN_OPT_IMAGE=          # use image file, see --image
+CEN_OPT_RESTORE=        # see --restore
+CEN_OPT_EXTRACT=        # see --extract
 
 # Data
 
-CEN_DAT_DOMAIN=         # from --clone
-CEN_DAT_LABEL=          # root label, see do_label()
-CEN_DAT_LSWAP=          # swap label, see do_label()
-CEN_DAT_FIXUP=          # run do_fixup once flag
+DAT_DISPATCH=           # dispatch() main action
+DAT_HOOK_QUIT=          # quit hook, see do_unmount
 
-CEN_DAT_VROOT='Volumes/Root'
-CEN_DAT_VHOME='Volumes/Home'
+DAT_CLONE_ORIG=         # see do_clone TODO remove
+DAT_ROOT_CLONE=         # root clone flag
+DAT_BOOT_CLONE=         # boot clone flag
 
-CEN_TAR_OPTS='--numeric-owner'
+DAT_DEST_ROOT=          # destination path: Root
+DAT_DEST_USER=          # ... Root/usr
+DAT_DEST_HOME=          # ... Home
+DAT_DEST_BOOT=          # ... systemd efi or firmware
+
+DAT_FILE_BOOT=          # boot data tar file
+
+DAT_LOOPDEV=            # losetup of CEN_OPT_IMAGE
+
+CEN_DAT_DOMAIN=         # from --clone TODO never set
+DAT_PART_LABEL=         # root label, see do_label()
+DAT_SWAP_LABEL=         # swap label, see do_label()
+DAT_RUN_FIXUP=          # run do_fixup once flag
+DAT_FMT_VFAT='vfat'
+                        # call 'dispatch -r' instead of 'run'
+CEN_HOOK_RUN='dispatch -r'
+                        # don't let tar use id names
+DAT_TAR_OPTS='--numeric-owner'
+                        # minimal bios grub config
+DAT_GRUB_MINIMAL="$CEN_TOOLS/templates/grub-minimal-cfg"
 
 # ------------------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------------------
 
-# check a restore file argument: <file>
-_do_chk_file=
+# check a restore file argument: <vnam> <file> [<dflt> <patn>]
 do_chk_file() {
-    _do_chk_file=
-    [ -z "$1" -o "$1" = '-' ] && return
-    prettypath -c -s _do_chk_file -- "$1"
-    [ -r "$_do_chk_file" ] && return 0
-    error "Cannot read file: $_do_chk_file"
-    _do_chk_file= ; return 1
+    local _file="${2:-+}"
+    if [ "$_file" = '+' ] ; then
+        [ "${4:--}" = '-' ] && _file='-' || _file="${4/::::/$3}"
+    fi
+    if [ "$_file" = '-' ] ; then
+        printf -v "$1" '-' ; return 1
+    fi
+
+    prettypath -c -s "$1" -- "$_file"
+    [ -r "$_file" ] && return 0
+    error $"Cannot read file:" "$_file"
 }
 
 # check for writable block device: <device>
 do_chk_block() {
     if [ ! -b "$1" ] ; then
-        error "Not a block device: $1"
+        error $"Not a block device:" "$1"
     elif [ ! -w "$1" ] ; then
-        error "Cannot write to: $1"
+        error $"Cannot write to:" "$1"
     else
         return 0
     fi
@@ -63,55 +82,143 @@ do_chk_block() {
 
 # check swap partition
 do_chk_swap() {
-    [ "${CEN_FLG_SWAP:--}" = '-' ] && return 0
-    [ "${CEN_FLG_SWAP::1}" = '/' ] || CEN_FLG_SWAP="/dev/${CEN_FLG_SWAP#/dev/}"
-    do_chk_block "$CEN_FLG_SWAP"              # return status
+    [ "${CEN_OPT_SWAP:--}" = '-' ] && return 0
+    [ "${CEN_OPT_SWAP::1}" = '/' ] || CEN_OPT_SWAP="/dev/${CEN_OPT_SWAP#/dev/}"
+    do_chk_block "$CEN_OPT_SWAP"              # return status
 }
 
-# check the given partion
-do_chk_part() {
-    [ -n "$1" ] && CEN_FLG_PART="$1"
+# ------------------------------------------------------------------------------
+# rename the computer: [<boot>|-] <root>|-
+#
+#   if we have [boot] ignore - <boot>
+#   try to find [boot] if we have root
+#
+# ------------------------------------------------------------------------------
+do_clone() {
+    local dboot="${1:--}" droot="${2:--}" name="${CEN_OPT_CLONE:--}" curr="$PWD"
 
-    if [ -z "$CEN_FLG_PART" ] ; then
-        error "No root partition specified"
-        return 1
+    # do_clone_boot should set a flag and ingnore 2nd call
+
+    [ "$name" = '-' ] && return
+    [ "$name" = '-' ] && name="${DAT_PART_LABEL##*/}" && name="${name%%[_-]*}"
+    [ -z "$name" ] && quit -e $"Don't know new name, cannot rename"
+
+    [ -n "$DAT_ROOT_CLONE" ] && droot='-'           # run 1 time only
+    [ "$droot" != '-' ] && folder -c -- "$droot" && do_clone_root "$name"
+    [ "$name" = '+' ] && dboot='-'                  # new machine id
+
+    [ -n "$DAT_BOOT_CLONE" ] && dboot='-'           # run 1 time only
+    [ "$dboot" != '-' ] && folder -c -- "$dboot" && do_clone_boot "$name"
+    folder -c -- "$curr"
+
+    # update grub/loader and fstab
+    error -t || return
+    [ "$dboot" != '-' -o "$droot" != '-' ] && do_update "$dboot" "$droot" "$name"
+}
+
+do_clone_boot() {
+    DAT_BOOT_CLONE=1                                # only run once
+    local name="$1"
+    # this code runs after do_clone_boot, so use the save current name
+    if [ "$DAT_CLONE_ORIG" = "$name" ] ; then
+        trace -a -p $"The machine name is '%s', no rename" "$name"
+        return 0
     fi
-    [ "${CEN_FLG_PART::1}" = '/' ] || CEN_FLG_PART="/dev/${CEN_FLG_PART#/dev/}"
-    [ -n "$CEN_FLG_IMAGE" ] && return
-    do_chk_block "$CEN_FLG_PART"              # return status
+    do_marker '.' 'boot'
 }
 
-# try to find a nice path name: [-p]
-_do_nicename=
-do_nicename() {
-    local phys logi
-    if [ "$1" = "-p" ] ; then
-        phys=$(readlink -f "$2") ; _do_nicename="$phys"
+do_clone_root() {
+    DAT_ROOT_CLONE=1                                # only run once
+    [ -z "$CEN_OPT_DRYRUN" -a ! -d 'etc' ] &&
+        quit -e $"No '/etc' folder, cannot rename"
+
+    if [ "$name" = '+' ] ; then
+        confirm -a $"Generate a new machine-id" || quit -t
+        do_fixup                                    # fix missing things
+        do_machine_id ; return
+    fi
+
+    local item orig='<unknown>' name="$1"
+    readline -w -s DAT_CLONE_ORIG -x -i 'etc/hostname'
+    if [ "$DAT_CLONE_ORIG" = "$name" ] ; then
+        trace -a -p $"The machine name is '%s', no rename" "$name"
+        return 0
     else
-        phys=$(readlink -f "$1") ; _do_nicename="$1"
+        confirm -a $"Rename machine:" "$DAT_CLONE_ORIG => $name" || quit -t
     fi
-
-    case "$phys" in
-    /.autolocal/*_*)    logi="/mnt/${phys#*_}"  ;;
-    /.automount/*_*)    local host="${phys:12}"
-                        logi="/data/${host%%_*}/${phys#*_}";;
-    /run/shm|/run/tmp)  logi="/tmp" ;;
-    /run/shm/*|/run/tmp/*)
-                        logi="/tmp${phys:8}" ;;
-    esac
-
-    if [ -n "$logi" -a -e "$logi" ] ; then
-        [ "$_do_nicename" -ef "$logi" ] && _do_nicename="$logi"
+    if [ -d 'Volumes' ] ; then
+        do_marker "Volumes/Root"
+        do_marker "Volumes/Home" 'home'
+        do_marker '.' 'vol0'
+    else
+        do_marker '.'
+        do_marker 'home' 'home'
     fi
+    do_fixup                                        # fix missing things
+    do_machine_id
+    error -t || return
+
+    confirm -n -b $"Generate new ssh host keys" &&
+        embed -i -v centaurikeys -y -q hostkeys 'etc/ssh'
+
+    # remove persistent device names (legacy)
+    remove 'etc/udev/rules.d/'*-persistent-*
+    # remove name override
+    remove 'etc/sysctl.d/host+domain.conf'
+
+    # clean dhcp and samba caches
+    remove 'var/lib/dhcp'/*
+    remove 'var/lib/samba/wins.dat' 'var/cache/samba/browse.dat'
+    error -t || return
+
+    # generate network configuration
+    local conf="${CEN_DEFAULT:1}/centaurinetcfg"
+    if [ -e "$conf" ] ; then
+        [ -n "$CEN_DAT_DOMAIN" ] && full="$name.$CEN_DAT_DOMAIN" || full="$name"
+        trace -a $"Update network configuration:" "$full"
+        [ "$PWD" -ef '/' ] && orig= || orig='--output=.'
+        embed -i -v centaurinetcfg $orig "--config=$conf" setup "$full"
+    else
+        create -t -v name -- 'etc/hostname' 644
+        trace -a $"No 'centaurinetcfg', skip network configuration"
+    fi
+    error -t || return
+
+    # create resume
+    do_label "$name"
+    if [ -d 'etc/initramfs-tools/conf.d' ] ; then
+        if [ -z "$CEN_OPT_DRYRUN" ] ; then
+            item="resume=LABEL=$DAT_SWAP_LABEL"
+            create -t -v item -- 'etc/initramfs-tools/conf.d/resume'
+            message -a $"Run 'update-initramfs -u' manually to make hibernate work"
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# get target folder for --boot|--grub|--restore|--extract
+# ------------------------------------------------------------------------------
+do_destination() {
+    if [ "${1::5}" = '/dev/' ] ; then
+        do_chk_block "$1" || return
+### TODO still needed?
+DAT_DEST_ROOT=          # destination path: Root
+DAT_DEST_USER=          # ... Root/usr
+DAT_DEST_HOME=          # ... Home
+DAT_DEST_BOOT=          # ... systemd efi or firmware
+        usermount -e -b -o progress -r -s DAT_DESTINATION -- "$1"
+        return                                      # return status
+    fi
+    folder -s DAT_DESTINATION -- "$1"               # return status
 }
 
 # ------------------------------------------------------------------------------
 # create required /dev entries and folders
 # ------------------------------------------------------------------------------
 do_fixup() {
-    [ -n "$CEN_DAT_FIXUP" ] && return
-    message -a "Check/create required folders"
-    CEN_DAT_FIXUP=1
+    [ -n "$DAT_RUN_FIXUP" ] && return
+    message -a $"Check/create required folders"
+    DAT_RUN_FIXUP=1
 
     # make /tmp a symlink if missing
     [ -d 'tmp' ] || symlink -m '/dev/shm' 'tmp'
@@ -134,59 +241,87 @@ do_fixup() {
 }
 
 # ------------------------------------------------------------------------------
-# handle formatting and labelling
+# handle formatting and labelling: <part> <type> <suff> [+]
 # ------------------------------------------------------------------------------
 do_format() {
-    [ -n "$CEN_DAT_LABEL" ] && message -a "Will label root partition as:" "$CEN_DAT_LABEL"
-
-    # do we need a mount point?
-    if [ -n "$CEN_FLG_MOUNT" ] ; then
-        if [  -d "$CEN_FLG_MOUNT" ] ; then
-            message -a "Using moint point:" "$CEN_FLG_MOUNT"
-        else
-            folder -f -m -r -t '_mount' ; CEN_FLG_MOUNT="$CEN_FOLDER"
-            message -a "Created moint point:" "$CEN_FLG_MOUNT"
-        fi
-        [ -d "$CEN_FLG_MOUNT" ] || fatal "Not a directory:" "$CEN_FLG_MOUNT"
-        [ -w "$CEN_FLG_MOUNT" ] || fatal "Cannot write to:" "$CEN_FLG_MOUNT"
+    [ -z "$1" ] && return
+    local part="$1" type="$2" labl
+    case "$part" in
+    /dev/*) ;;
+    /img/?) part="${DAT_LOOPDEV}p${part:5}" ;;
+    *)      quit -e $"Formatting needs a partition name:" "$part"
+    esac
+    do_chk_block "$part"
+    findmount "$part" && quit $"Partition must not be mounted:" "$part"
+    if [ "${CEN_OPT_LABEL:--}" = '-' ] ; then
+         [ -z "$4" ] && labl=$"-none-"
+    else
+        labl="$DAT_PART_LABEL"
+        [ "$3" = 'root' ] || labl="${labl%_*}_$3"
     fi
 
-    # --- formatting ---
-
-    [ -n "$CEN_FLG_PART" ] && system -q -r umount "$CEN_FLG_PART"
-    system -q -r umount "$CEN_FLG_MOUNT"
-
-    if [ -n "$CEN_FLG_MKFS" ] ; then
-
-        if [ -n "$CEN_FLG_EXTFS" ] ; then
-           message -a "Creating ext$CEN_FLG_EXTFS filesystem ..."
-           confirm -a "Format $CEN_FLG_PART" || quit -t
-           mopt="-t ext4"
-           [ "$CEN_FLG_EXTFS" = 3 ] && mopt="-O dir_index"
-           system -f -p mke2fs -q -j -m0 $mopt "$CEN_FLG_PART"
-        else
-           message -a "Creating btrfs filesystem ..."
-           confirm -a "Format $CEN_FLG_PART" || quit -t
-           embed centaurisnapshot --yes init "$CEN_FLG_MOUNT" "$CEN_FLG_PART" "${CEN_FLG_LABEL:--}" || quit
-        fi
-        CEN_YESNO="y"
-    fi
-
-    if [ -n "$CEN_FLG_PART" ] ; then
-        if [ "${CEN_DAT_LABEL:--}" = '-' ] ; then
-            if [ -n "$CEN_FLG_EXTFS" ] ; then
-                message -a "Disable disk checks ..."
-                system -f -p tune2fs -c0 -i0 "$CEN_FLG_PART"
+    local args=("mkfs.$2")
+    case "$2" in
+    f2fs)   [ -n "$labl" ] && args+=(-l "$labl") ; args+=(-f) ;;
+    ext4)   args+=(-O dir_index)        # tune2fs -c0 -i0
+            [ -n "$labl" ] && args+=(-L "$labl") ;;
+    btrfs)  [ -n "$labl" ] && args+=(-L "$labl") ; args+=(-f) ;;
+    *)      [ -n "$labl" ] && args+=(-n "$labl")
+            if [ "${#labl}" -gt 11 ] ; then
+                do_prefix ; labl="${DAT_PREFIX}_${labl##*_}"
+                trace -a $"VFAT label too long, using random prefix"
             fi
-        else
-            message -a "Writing Label '$CEN_DAT_LABEL' ..."
-            if [ -n "$CEN_FLG_EXTFS" ] ; then
-                system -f -p tune2fs -c0 -i0 -L "$CEN_DAT_LABEL" "$CEN_FLG_PART"
-            else
-                system -f -p btrfs filesystem label "$CEN_FLG_PART" "$CEN_DAT_LABEL"
-            fi
-        fi
+    esac
+
+    if [ -z "$4" ] ; then
+        message -a -p $"Going to format %12s  as %-8s  label %s" "'$part'" "'$2'" "'$labl'"
+        return
     fi
+
+    # --- format ---
+
+    [ -n "$labl" ] && message -a -p $"Will label %s partition as: %s" "$3" "$labl"
+    system -e -p -g 0 -- ${args[@]} "$part" || return
+    [ "$3" = 'root' ] || return 0
+
+    # --- extra steps for root partition ---
+
+    if [ "$2" = 'ext4' ] ; then
+        message -a $"Disable ext4 disk checks ..."
+        system -e -p tune2fs -c0 -i0 "$part"
+    elif [ "$2" = 'btrfs' ] ; then
+        message -a $"Create btrfs subvolumes ..."
+        do_destination "$part" || return
+        folder -m "$DAT_DESTINATION/Volumes" || return
+        folder -m "$DAT_DESTINATION/Snapshots" || return
+        local item vols="$DAT_DESTINATION/Volumes"
+        for item in 'Root' 'Home' 'Export' 'Shared' 'Backup' ; do
+            system -e -p -g 0 -- btrfs subvolume create "$vols/$item" || return
+        done
+        folder -m "$vols/Backup/disk" || return
+        folder -m "$vols/Backup/data" || return
+
+        system -e -p -a args -d '\n' btrfs subvolume list -t "$DAT_DESTINATION" || return
+        for item in "${args[@]}" '' ; do
+            set -f ; set -- $item ; set +f
+            [ "${4##*/}" = 'Root' ] && break
+        done
+        if [ -z "$1" ] ; then
+            warning $"Cannot set default volume"
+        else
+            system -e -p -g 0 -- btrfs subvolume set-default \
+                                       "$1" "$DAT_DESTINATION" || return
+        fi
+        # location() uses '/dev' to identify a root volume
+        folder -m "$vols/Root/dev" || return
+    fi
+
+    if [ "$2" != 'btrfs' ] ; then
+        do_destination "$part" || return
+        # location() uses '/dev' to identify a root volume
+        folder -m "$DAT_DESTINATION/dev" || return
+    fi
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -194,289 +329,197 @@ do_format() {
 # ------------------------------------------------------------------------------
 do_label() {
     # implicit label: see --name and archive
-    [ -z "$CEN_FLG_LABEL" ] && CEN_FLG_LABEL="$CEN_FLG_CLONE"
-    [ -z "$CEN_FLG_LABEL" ] && CEN_FLG_LABEL="${1##*/}" && CEN_FLG_LABEL="${CEN_FLG_LABEL%%[_-]*}"
-    [ -n "$CEN_FLG_LABEL" ] || return                   # no archive
+    [ -z "$CEN_OPT_LABEL" ] && CEN_OPT_LABEL="$CEN_OPT_CLONE"
+    [ -z "$CEN_OPT_LABEL" ] && CEN_OPT_LABEL="${1##*/}" && CEN_OPT_LABEL="${CEN_OPT_LABEL%%[_-]*}"
+    [ "${CEN_OPT_LABEL:--}" = '-' ] && return          # no labels
 
     local sufi='root'
-    [ -z "$CEN_FLG_EXTFS" ] && sufi="vol0"
+    [ "$CEN_OPT_FORMAT" = 'btrfs' ] && sufi='vol0'
 
     # append "_root" and "_swap" suffixes
-    case "$CEN_FLG_LABEL" in
-    -)                                                  # no labels
+    case "$CEN_OPT_LABEL" in
+    *_swap)     DAT_PART_LABEL="${CEN_OPT_LABEL%_*}_$sufi"
+                DAT_SWAP_LABEL="${CEN_OPT_LABEL}"
                 ;;
-    *_swap)     CEN_DAT_LABEL="${CEN_FLG_LABEL%_*}_$sufi"
-                CEN_DAT_LSWAP="${CEN_FLG_LABEL}"
+    *_*)        DAT_PART_LABEL="${CEN_OPT_LABEL}"
+                DAT_SWAP_LABEL="${CEN_OPT_LABEL%_*}_swap"
                 ;;
-    *_*)        CEN_DAT_LABEL="${CEN_FLG_LABEL}"
-                CEN_DAT_LSWAP="${CEN_FLG_LABEL%_*}_swap"
-                ;;
-    *)          CEN_DAT_LABEL="${CEN_FLG_LABEL}_$sufi"
-                CEN_DAT_LSWAP="${CEN_FLG_LABEL}_swap"
+    *)          DAT_PART_LABEL="${CEN_OPT_LABEL}_$sufi"
+                DAT_SWAP_LABEL="${CEN_OPT_LABEL}_swap"
     esac
+}
+
+# ------------------------------------------------------------------------------
+# Get volume paths: <root> <user> <home> <boot>
+# ------------------------------------------------------------------------------
+do_locations() {
+    local froot="${1:--}" fuser="${2:--}" fhome="${3:--}" fboot="${4:--}" \
+          xhom='-' droo dest=()
+    location -b "$DAT_DESTINATION" -f -d "$CEN_OPT_DIST" -m -s DAT_DEST_ROOT 'Root'
+    case "${DAT_DEST_ROOT:--}" in
+    -)                  error $"Missing 'Root' volume" ; return 1 ;;
+    */Volumes/[A-Z]*)   droo="Volumes/${DAT_DEST_ROOT##*/}" ;;
+    *)                  droo='.../' ; DAT_DEST_ROOT+='/'
+                        xhom="${DAT_DEST_ROOT%/}/home"
+    esac
+
+    [ -z "${CEN_OPT_BOOT%[-+]}" ] && DAT_DEST_BOOT="${DAT_DEST_ROOT%/}/boot"
+    DAT_DEST_USER="${DAT_DEST_ROOT%/}/usr"
+    [ "$froot" = '-' ] || dest+=("$droo")
+    [ "$fuser" = '-' ] || dest+=("${droo%/}/usr")
+
+    if [ "$fhome" != '-' ] ; then
+        location -b "$DAT_DESTINATION" -d "$CEN_OPT_DIST" -s DAT_DEST_HOME 'Home'
+        [ "${DAT_DEST_HOME:--}" = '-' ] && DAT_DEST_HOME="$xhom"
+        case "$DAT_DEST_HOME" in
+        -)                  error $"Missing 'Home' volume" ; return 1 ;;
+        */Volumes/[A-Z]*)   dest+=("Volumes/${DAT_DEST_HOME##*/}") ;;
+        *)                  dest+=(".../${DAT_DEST_HOME##*/}")
+        esac
+    fi
+
+    if [ "$fboot" != '-' ] ; then
+    ### TODO --boot
+    warning "[boot] only for dest=/"
+        location -b "$DAT_DESTINATION" -d "$CEN_OPT_DIST" -s DAT_DEST_BOOT '[boot]'
+        case "${DAT_DEST_BOOT,,}" in
+        */efi)              dest+=("${DAT_DEST_BOOT##*/boot}image-$CEN_OPT_DIST") ;;
+        *)                  warning $"Cannot find 'EFI' partition"
+                            DAT_DEST_BOOT= ;;
+        esac
+    fi
+    if [ -z "$dest" ] ; then
+        error $"Nothing to restore" ; return 1
+    fi
+    message -h $"Volumes:" "${dest[@]//\/\//\/}" ; return 0
 }
 
 # ------------------------------------------------------------------------------
 # generate a new machine id
 # ------------------------------------------------------------------------------
 do_machine_id() {
+    system -w -c systemd-machine-id-setup || return
     remove -f 'etc/machine-id' 'var/lib/dbus/machine-id'
-    if type -t systemd-machine-id-setup >/dev/null ; then
-        system -p systemd-machine-id-setup --root=.
-        symlink '/etc/machine-id' 'var/lib/dbus/machine-id'
-    fi
+    system -p systemd-machine-id-setup --root=.
+    symlink '/etc/machine-id' 'var/lib/dbus/machine-id'
 }
 
 # ------------------------------------------------------------------------------
 # write a marker: <folder> <text>
 # ------------------------------------------------------------------------------
 do_marker() {
-    local host="${CEN_FLG_CLONE:--}"
-    [ "$host" = '-' ] && host="${CEN_DAT_LABEL##*/}" && host="${host%%[_-]*}"
+    local host="${CEN_OPT_CLONE:--}"
+    [ "$host" = '-' ] && host="${DAT_PART_LABEL##*/}" && host="${host%%[_-]*}"
     [ -n "$host" ] || return
     [ -d "$1" ] || return
     local text="${2##*_}" ; [ -z "$text" ] && text='root'
     [ "$text" = 'root' ] && do_marker "$1/export" 'export'
-    local mark="${host}_$text" ; mark="${mark^^}"
-    [ -e "$1/$mark" ] && return
-    eval set -- "$1/$mark" "$1"/[A-Z]*_"${text^^}"
-    remove -- "$2"
-    system -e -p -- touch -- "$1"
+    local mark="${host}_$text" ; mark="$1/${mark^^}"
+    create -- "$mark" 700
+    for text in "$1"/[A-Z]*_"${text^^}" ; do
+        [ "$text" = "$mark" ] || remove -- "$text"
+    done
 }
 
 # ------------------------------------------------------------------------------
-# rewrite a config file: <file> <regx>
+# windows image: <file>
 # ------------------------------------------------------------------------------
-do_rewrite() {
-    local fnam="$1" ; shift
-  #  if [ -n "$CEN_OPT_DRYRUN" ] ; then
-  #      message -a "dryrun: not rewriting: $fnam" ; return 0
-  #  fi
-    dryrun -s "Not rewriting: $fnam" && return 0
-    if [ ! -r "$fnam" ] ; then
-        warning "Cannot rewrite: $fnam" ; return 1
-    fi
-
-    system -e -p sed --regexp-extended --in-place=".$CEN_NAME" -e "$1" "$fnam"
-    message -a -c "Rewrote" "$fnam"
-}
-
-# ------------------------------------------------------------------------------
-# rename the computer: -no args-
-# ------------------------------------------------------------------------------
-do_rename() {
-    local full home base name="${CEN_FLG_CLONE:--}"
-    local vroot="$CEN_DAT_VROOT" vhome="$CEN_DAT_VHOME"
-    [ "$name" = '-' ] && name="${CEN_DAT_LABEL##*/}" && name="${name%%[_-]*}"
-
-    if [ -z "$name" ] ; then
-        error "Don't know new name, cannot rename" ; return 1
-    fi
-
-    if [ -n "$CEN_FLG_BOOT" ] ; then            # restoring efi partition
-        do_update "$name" ; return              # update only grub and loader
-    fi
-
-    # on BRTFS
-    if matchpath -d -o -s vroot "$vroot-$CEN_FLG_DIST" "$vroot" ; then
-        base="$PWD"
-        matchpath -d -o -p -s home "$vhome-$CEN_FLG_DIST" "$vhome" ||
-            fatal "Missing 'Home' volume"
-        folder -c -f "$vroot"
-
-    elif [ -z "$CEN_OPT_DRYRUN" -a ! -d 'etc' ] ; then
-        error "No '/etc' folder, cannot rename" ; return 1
-    elif [ '../Root/etc' -ef 'etc' ] ; then     # on BTRFS ...
-        base='../..' ; home='../Home'
-    fi
-
-    do_fixup                                    # fix missing things
-    if [ "$name" = '+' ] ; then
-        confirm -a "Generate a new machine-id" && do_machine_id
-        return 0
-    fi
-
-    local item orig='<unknown>' conf="${CEN_ROOT:1}/default/centaurinetcfg"
-    [ -r 'etc/hostname' ] && orig="$(< etc/hostname)"
-    if [ "$orig" = "$name" ] ; then
-        if [ -z "${CEN_FLG_CLONE[1]}" ] ; then
-            trace -a "The machine name is '$name', no rename"
-            return 0
-        fi
-    elif [ -z "$CEN_OPT_DRYRUN" ] ; then
-        confirm -a "Rename machine: $orig => $name" || return 1
-    else
-        message -a "Rename machine: $orig => $name"
-    fi
-
-    do_marker "$base" 'vol0' ; do_marker "$home" 'home' ; do_marker '.'
-    do_machine_id
-    confirm -n -b "Generate new ssh host keys" &&
-        embed -i -v centaurikeys -y -q hostkeys 'etc/ssh'
-
-    # remove persistent device names (legacy)
-    remove -f 'etc/udev/rules.d/'*-persistent-*
-    # remove name override
-    remove -f 'etc/sysctl.d/host+domain.conf'
-
-    # clean dhcp and samba caches
-    remove -f 'var/lib/dhcp'/*
-    remove -f 'var/lib/samba/wins.dat' 'var/cache/samba/browse.dat'
-
-    # generate network configuration
-    if [ -e "$conf" ] ; then
-        [ -n "$CEN_DAT_DOMAIN" ] && full="$name.$CEN_DAT_DOMAIN" || full="$name"
-        trace -a "Update network configuration:" "$full"
-        [ "$PWD" -ef '/' ] && orig= || orig='--output=.'
-        embed -i -v centaurinetcfg $orig "--config=$conf" setup "$full"
-    else
-        create -t -v name -- 'etc/hostname' 644
-        trace -a "No 'centaurinetcfg', skip network configuration"
-    fi
-
-    # create resume
-    do_label "$name"
-    if [ -d 'etc/initramfs-tools/conf.d' ] ; then
-        if [ -z "$CEN_OPT_DRYRUN" ] ; then
-            item="resume=LABEL=$CEN_DAT_LSWAP"
-            create -t -v item -- 'etc/initramfs-tools/conf.d/resume'
-            message -a "Run 'update-initramfs -u' manually to make hibernate work"
-        fi
-    fi
-
-    # update grub/loader and fstab
-    do_update "$name" +
-}
-
-# ------------------------------------------------------------------------------
-# update grub and fstab: (1) do_update <name>       # grub/efi/firmware only
-#                        (2) do_update <name> +     # ... also update fstab
-# ------------------------------------------------------------------------------
-do_update() {
-    local name="${1:--}" what=() firm load
-    [ "$name" = '-' -o "$name" = '+' ] && return
-
-    local sboo="${CEN_FLG_CLONE[1]:-+}"             # 2nd --clone overrides boot label
-    local sdsk="${CEN_FLG_CLONE[2]:-+}"             # 3rd --clone overrides root label
-    local sgrb="${CEN_FLG_CLONE[3]:--}"             # 4th --clone is path of grub.cfg
-    [ "$sboo" = '+' ] && sboo="$name"
-    [ "$sdsk" = '+' ] && sdsk="$name"
-    trace -a -c -p 'update boot' "boot-label=%s  root-label=%s  grub-path=%s" "$sboo" "$sdsk" "$sgrb"
-
-    # grub: <boot-mpt>/efi/grub
-    # load: <boot-mpt>/efi/loader/entries
-    # firm: <boot-mpt>
-
-    if [ "$sgrb" = '+' ] ; then
-        matchpath -e -d -o -s sgrb -- mnt/boot/{grub,efi,EFI} boot/{grub,efi,EFI}
-    elif [ -n "$CEN_FLG_BOOT" ] ; then
-        matchpath -e -d -o -s sgrb -- ./{grub,efi,EFI} ./overlays
-    fi
-
-    if [ "${sgrb:--}" = '-' ] ; then
-        if [ -n "$CEN_FLG_BOOT" ] ; then
-            error "No boot path not found" "(base=$PWD)" ; return
-        fi
-        sgrb='-'
-    else
-        trace -a -c "Boot loader path" "$sgrb (base=$PWD)"
-    fi
-
-    local mpnt
-    case "$sgrb" in
-    -)  ;;
-    */grub|*/efi|*/EFI|*/overlays)
-        if [ -h "$sgrb" ] ; then
-            error "Boot path must not be a symlink:" "$sgrb" ; return
-        fi
-        mpnt="${sgrb%/*}" ;;
-    *)  error "Bad boot path (must match '*/grub|efi|overlays'):" "$sgrb" ; return
+do_ntfsclone() {
+    local xpnd path="$1" dest="$CEN_OPT_EXTRACT"
+   # if [ "$
+   # "$DAT_LOOPDEV"
+    case "${path##*/}" in
+    *.img)      ;;
+    *.img.xz)   xpnd='xzcat' ;;
+    *.img.gz)   xpnd='zcat' ;;
+    *.img.bz2)  xpnd='bzcat' ;;
+    *.img.lzo)  xpnd='lzop -cd' ;;
+    *.img.lzma) xpnd='lzcat' ;;
+    *.img.zstd) xpnd='zstdcat' ;;
+    *.img.*)    quit -e $"Unknown image compression:" "$path" ;;
+    *)          return 0
     esac
 
-    if [ -z "$mpnt" ] ; then
-        firm='-' ;  load='-' ;  sgrb='-'
-    elif [ -d "$mpnt/efi" ] ; then
-        firm='-' ; load="$mpnt/loader/entries" ; sgrb="$mpnt/grub"
-    elif [ -d "$mpnt/EFI" ] ; then              # just to be sure
-        firm='-' ; load="$mpnt/loader/entries" ; sgrb="$mpnt/grub"
-    elif [ -d "$mpnt/grub" ] ; then
-        firm='-' ; sgrb="$mpnt/grub" ; load='-'
+    [ "$#" = 1 ] || quit -e $"Extra arguments not allowed"
+    do_chk_file path "$path" || return 1
+    do_chk_block "$dest" || return 1
+
+    confirm -a -f $"Restore '%s' from '%s' ..." "$dest" "${path##*/}" || quit -t
+
+    # do an ntfs-image restore
+
+    if [ -z "$xpnd" ] ; then
+        system -e -g 0 -- ntfsclone --restore-image --overwrite "$dest" "$path"
     else
-        firm="$mpnt" ; sgrb='-' ; load='-'
+       system -e -c ${xpnd%% *} ntfsclone || return
+       system -g 0 eval "$xpnd '$path' | ntfsclone --restore-image --overwrite '$dest'" -
+       # syspipe -o "$xpnd $path" -d "ntfsclone --restore-image --overwrite $dest -"
     fi
-    trace -a -c -p "volume labels"   "%-20s %s" "boot=$sboo" "root=$sdsk"
-    trace -a -c -p "bootloader conf" "%-20s %s" "grub=$sgrb" "systemd=$load"
-
-    # LABEL=xxxx_boot    ->  LABEL=${sboo}_boot   # (1) boot label
-    # LABEL=bootfs       ->  LABEL=${sboo}_boot   # (3) raspberrypi legacy
-    # PARTUUID=*-01      ->  LABEL=${sboo}_boot   # (3)
-
-    # LABEL=xxxx_root    ->  LABEL=${sdsk}_root   # (2) root label
-    # LABEL=xxxx_($svol) ->  LABEL=${sdsk}_...    # (2)
-    # LABEL=rootfs       ->  LABEL=${sdsk}_root   # (3)
-    # PARTUUID=*-02      ->  LABEL=${sdsk}_root   # (3)
-
-    # UUID=* /           ->  LABEL=${sdsk}_root
-    # UUID=* none        ->  LABEL=${sdsk}_swap
-
-    local stab svol='swap|vol0|vol1|archive|backup|shared|vbox|windows'
-    if [ "$sboo$sdsk" != '--' -a -n "$2" ] ; then
-        stab="s/^(LABEL=[a-zA-Z0-9-]*_boot|LABEL=bootfs|PARTUUID=[a-zA-Z0-9]*-01)/LABEL=${sboo}_boot/g"
-        stab+="; s/^(#?LABEL=)([a-zA-Z0-9-]*)_(root|$svol)/\1${sdsk}_\3/g"
-        stab+="; s/^(PARTUUID=[a-zA-Z0-9]*-02|LABEL=rootfs)/LABEL=${sdsk}_root/g"
-        stab+="; s/^(UUID=[-a-zA-Z0-9 ]*\/ )/LABEL=${sdsk}_root \/ /g"
-        stab+="; s/^(UUID=[-a-zA-Z0-9 ]*none )/LABEL=${sdsk}_swap none /g"
-        what+=('etc/fstab')
-        do_rewrite 'etc/fstab' "$stab"
-    fi
-
-    if [ "$firm" != '-' ] && [ -e "$firm/cmdline.txt" ] ; then
-        local pref='root='
-        stab="s/^$pref(#?LABEL=)([a-zA-Z0-9-]*)_(root|$svol)/${pref}\1${sdsk}_\3/g"
-        stab+="; s/^$pref(PARTUUID=[a-zA-Z0-9]*-02|LABEL=rootfs)/${pref}LABEL=${sdsk}_root/g"
-        what+=('firmware/cmdline.txt')
-        do_rewrite "$firm/cmdline.txt" "$stab"
-    elif [ "$sgrb" != '-' ] && [ ! -h "$sgrb" ] ; then
-        if [ -z "$2" ] ; then                   # only if root is known, see fstab update
-            :
-        elif netoption 'sysdnames' "$name" ; then
-            remove 'etc/systemd/network/99-default.link'
-        else
-            symlink -n '/dev/null' 'etc/systemd/network/99-default.link'
-        fi
-        [ "${sdsk:-}" = '-' ] && stab="$name" || stab="$sdsk"
-        stab="s/^set myname=.*/set myname=$stab/"
-        what+=('grub/grub.cfg')
-        do_rewrite "$sgrb/grub.cfg" "$stab"
-    fi
-
-    # systemd loader and UKI cmdlines
-    if [ "$load" != '-' ] && [ -d "$load" ] ; then
-        local list item
-        stab="s/root=LABEL=[a-zA-Z0-9-]*_vol0/root=LABEL=${name}_vol0/"
-        stab+="; s/resume=LABEL=[a-zA-Z0-9-]*_swap/resume=LABEL=${name}_swap/"
-        matchpath -f -a list -- "$load"/*.conf "$mpnt"/image*/cmdline &&
-            what+=('loader/entries')
-        for item in "${list[@]}" ; do
-            do_rewrite "$item" "$stab"
-        done
-    fi
-
-    message -a "New hostname is '$name'. Please check:" "${what[@]}"
+    case "$?" in
+    0)  return 1 ;;
+    *)  quit -e $"Running 'ntfsclone' failed (status $?)"
+    esac
+    return 1
 }
 
 # ------------------------------------------------------------------------------
-# restore an archive: <dest> <file> <opt>...
+# make 6 char random string not starting with lower case letter
 # ------------------------------------------------------------------------------
-do_restore() {
-    [ -n "$2" ] || return                       # file not specified
+do_prefix() {
+    [ -n "$DAT_PREFIX" ] && return
+    local pref
+    while : ; do
+        read -r -N 16 pref </dev/urandom || fatal $"Cannot read:" '/dev/urandom'
+        system -f -p -r -s pref base64 <<<$pref
+        [ "${#pref}" -gt 10 ] && break
+    done
+    pref="${pref//[+\/]/%}"                         # + and / are not allowed
+    pref="${pref:3:6}" ; DAT_PREFIX="${pref^}"
+}
+
+# ------------------------------------------------------------------------------
+# rewrite a config file: <regx> <file>...
+# ------------------------------------------------------------------------------
+do_rewrite() {
+    local expr="$1" fnam ; shift
+    for fnam in "$@" ; do
+        if dryrun -s ; then
+            message -a -c $"Not rewriting" "$fnam"
+        elif [ ! -r "$fnam" ] ; then
+            warning $"Cannot rewrite:" "$fnam"
+        elif [ -h "$fnam" -o -h "${fnam%/*}" ] ; then
+            warning $"No rewrite via symlink:" "$fnam"
+        else
+            system -e -p sed --regexp-extended --in-place=".$CEN_NAME" \
+                -e "$expr" "$fnam" && message -a -c $"Rewrote" "$fnam"
+        fi
+    done
+}
+
+# ------------------------------------------------------------------------------
+# quit hook to unmount
+# ------------------------------------------------------------------------------
+do_unmount() {
+    if [ -n "$DAT_LOOPDEV" ] ; then
+        trace -c -a -p 'image file' $"Release '%s' ..." "$DAT_LOOPDEV"
+        folder -c -f '/'
+        system -q -r -- losetup -d "$DAT_LOOPDEV"
+    fi
+    $DAT_HOOK_QUIT "$@"
+}
+
+# ------------------------------------------------------------------------------
+# restore a tar archive: <dest> <file> <opt>...
+# ------------------------------------------------------------------------------
+do_untar() {
+    [ "${1:--}" = '-' ] && return 0                 # dest not specified
+    [ "${2:--}" = '-' ] && return 0                 # file not specified
     local dest="$1" ; shift
     local file="$1" ; shift
 
     # get compression and archive type
 
     local compr='--auto-compress'
-    local isimg xpand
     case "$file" in
     *.tgz)      compr='--gzip' ;;
     *.tar.xz)   ;;
@@ -485,286 +528,512 @@ do_restore() {
     *.tar.lzo)  ;;
     *.tar.lzma) ;;
     *.tar.zstd) ;;
-    *.img)      isimg=1 ;;
-    *.img.xz)   isimg=1 ; xpand='xzcat' ;;
-    *.img.gz)   isimg=1 ; xpand='zcat' ;;
-    *.img.bz2)  isimg=1 ; xpand='bzcat' ;;
-    *.img.lzo)  isimg=1 ; xpand='lzop -cd' ;;
-    *.img.lzma) isimg=1 ; xpand='lzcat' ;;
-    *.img.zstd) isimg=1 ; xpand='zstdcat' ;;
-    *.img.*)    fatal "Unknown image compression: $file" ;;
-    *)          fatal "Unknown archive type or compression: $file" ;;
+    *)          quit -e $"Unknown archive type or compression:" "$file" ;;
     esac
-
-    # do an ntfs-image restore
-
-    if [ -n "$isimg" ] ; then
-        message -a -p "Restore '%s' from '%s' ..." "$dest" "${file##*/}"
-        do_chk_part "$dest" || return
-        dest="$CEN_FLG_PART"
-        if [ -z "$xpand" ] ; then
-            system -f ntfsclone --restore-image --overwrite "$dest" "$file"
-        else
-            $xpand "$file" | ntfsclone --restore-image --overwrite "$dest" -
-            local stat="$?"
-            [ "$stat" = 0 ] || fatal "'ntfsclone' failed (status $stat)"
-        fi
-        return
-    fi
 
     # restore a tar-archive
 
-    message -a -p "Restore '%s' from '%s' ..." "$dest" "${file##*/}"
-    folder -r -c -m -f -s dest "$CEN_FLG_MOUNT/$dest"
-    system -f tar -xf "$file" --overwrite --recursive-unlink $compr $CEN_TAR_OPTS "$@"
+    message -a -p $"Restore '%s' from '%s' ..." "$dest" "${file##*/}"
+    local base="$PWD"
+    folder -r -c -m -- "$dest"
+    system -t -e tar -xf "$file" --overwrite --recursive-unlink $compr $DAT_TAR_OPTS "$@"
+    [ "$DAT_DEST_ROOT" = "$dest" ] && do_fixup  # create required folders
+    folder -r -c -- "$base"
+    error -t || return 1
 
-    # change things like "/mnt/xxx/home/home" to "/mnt/xxx/home"
-
-    local base="${dest##*/}"                    # gets home/usr
-    if [ -z "$base" ] ; then                    # return for root
-        do_marker "$dest" ; return
+    # rename paths like "xxx/home/home" to "xxx/home"
+    base="${dest##*/}"                          # gets 'home' or 'usr'
+    if [ "$base" != 'home' -a "$base" != 'usr' ] ; then
+        do_marker "$dest"
+        error -t ; return                       # return status
     fi
 
-    set -- *
-    base="${base,}"                             # lower case
-    if [ "$*" = "$base" ] ; then
-        trace -i "Change '${dest}/$base' to '$dest'"
-        cd ..
-        move -f -- "${dest}/$base" "$dest/$base.$$.$CEN_NAME"
-        set -- $dest/$base.$$.$CEN_NAME/*
-        [ "$dest/$base.$$.$CEN_NAME/*" = "$*" ] || move -f -- "$@" "$dest"
-        set -- $dest/$base.$$.$CEN_NAME/.[!.]*
-        [ "$dest/$base.$$.$CEN_NAME/.[!.]*" = "$*" ] || move -f -- "$@" "$dest"
-        remove -d -- "$dest/$base.$$.$CEN_NAME"
+    set -- "$dest"/*                            # may result on 'home' or 'usr'
+    file="${dest##*/}" ; file="${file,}"        # lower case
+    if [ "${1##*/}" = "$file" ] ; then          # needs to be renamed ...
+        trace -i "Change '$1' to '$dest'"
+        move -f -- "$1" "$dest.$$.$CEN_NAME"
+        set -- "$dest.$$.$CEN_NAME"/*
+        [ "${1##*/}" = '*' ] || move -f -- "$@" "$dest"
+        set -- "$dest.$$.$CEN_NAME"/.[!.]*
+        [ "${1##*/}" = '.[!.]*' ] || move -f -- "$@" "$dest"
+        remove -d -- "$dest.$$.$CEN_NAME"
     fi
-    [ "$base" != "usr" ] && do_marker "$dest" "$base"
+    [ "$base" != 'usr' ] && do_marker "$dest" "$base"
+    error -t                                    # return status
 }
 
 # ------------------------------------------------------------------------------
-# create swap partition
+# update grub and fstab: <boot> <root> <name>
 # ------------------------------------------------------------------------------
-do_swap() {
-    [ -n "$CEN_DAT_LSWAP" ] && message -a "Will label swap partition as: $CEN_DAT_LSWAP"
-    confirm -a "Make swap on $CEN_FLG_SWAP" || quit -t
-    if [ -z "$CEN_DAT_LSWAP" ] ; then
-        system -f -p mkswap "$CEN_FLG_SWAP"
-    else
-        system -f -p mkswap -L "$CEN_DAT_LSWAP" "$CEN_FLG_SWAP"
+do_update() {
+    local dboot="${1:--}" droot="${2:--}" name="${3:--}" what=() list stab
+    [ "$name" = '-' -o "$name" = '+' ] && return
+    message -a -c "update" "bios: $dboot   root: $droot   name: %name"
+
+    local stab svol='swap|vol0|vol1|archive|backup|shared|vbox|windows'
+
+    # root:         <root-mpt>/etc/fstab
+    # bios:         <boot-mpt>/grub/grub.cfg
+    # grub:         <boot-mpt>/efi/grub/grub.cfg
+    # loader:       <boot-mpt>/efi/loader/entries/*.conf
+    # firmware:     <boot-mpt>/cmdline.txt cmdline-*.txt
+
+    # --- etc/fstab ---
+
+    # LABEL=xxxx_boot    ->  LABEL=${name}_boot   # (1) boot label
+    # LABEL=bootfs       ->  LABEL=${name}_boot   # (3) raspberrypi legacy
+    # PARTUUID=*-01      ->  LABEL=${name}_boot   # (3)
+
+    # LABEL=xxxx_root    ->  LABEL=${name}_root   # (2) root label
+    # LABEL=xxxx_($svol) ->  LABEL=${name}_...    # (2)
+    # LABEL=rootfs       ->  LABEL=${name}_root   # (3)
+    # PARTUUID=*-02      ->  LABEL=${name}_root   # (3)
+
+    # UUID=* /           ->  LABEL=${name}_root
+    # UUID=* none        ->  LABEL=${name}_swap
+
+    if [ -f "$droot/etc/fstab" ] ; then
+        stab="s/^(LABEL=[a-zA-Z0-9-]*_boot|LABEL=bootfs|PARTUUID=[a-zA-Z0-9]*-01)/LABEL=${name}_boot/g"
+        stab+="; s/^(#?LABEL=)([a-zA-Z0-9-]*)_(root|$svol)/\1${name}_\3/g"
+        stab+="; s/^(PARTUUID=[a-zA-Z0-9]*-02|LABEL=rootfs)/LABEL=${name}_root/g"
+        stab+="; s/^(UUID=[-a-zA-Z0-9 ]*\/ )/LABEL=${name}_root \/ /g"
+        stab+="; s/^(UUID=[-a-zA-Z0-9 ]*none )/LABEL=${name}_swap none /g"
+        do_rewrite "$stab" "${droot%/}/etc/fstab"
     fi
+
+    # --- cmdline.txt ---
+
+    if [ -h "$dboot" ] ; then
+        warning $"Should not be a symlink:" "$dboot" ; dboot='-'
+    fi
+
+    matchpath -f -a list -- "$dboot/cmdline.txt" "$dboot"/cmdline-*.txt
+    local pref='root='
+    stab="s/^$pref(#?LABEL=)([a-zA-Z0-9-]*)_(root|$svol)/${pref}\1${name}_\3/g"
+    stab+="; s/^$pref(PARTUUID=[a-zA-Z0-9]*-02|LABEL=rootfs)/${pref}LABEL=${name}_root/g"
+    do_rewrite "$stab" "${list[@]}"
+
+    # --- grub.cfg ---
+
+    matchpath -f -a list -- \
+            "$droot/grub/grub.cfg" "$dboot/grub/grub.cfg" "$dboot"/[eE][fF][iI]/grub/grub.cfg
+    stab="s/^set myname=.*/set myname=$name/"
+    do_rewrite "$stab" "${list[@]}"
+
+    # --- loader and UKI cmdlines ---
+
+    matchpath -f -a list -- "$dboot/loader/entries"/*.conf "$dboot"/image*/cmdline
+    stab="s/root=LABEL=[a-zA-Z0-9-]*_vol0/root=LABEL=${name}_vol0/"
+    stab+="; s/resume=LABEL=[a-zA-Z0-9-]*_swap/resume=LABEL=${name}_swap/"
+    do_rewrite "$stab" "${list[@]}"
 }
 
 # ------------------------------------------------------------------------------
-# restore a system: [<root> [<usr> [<home>]]]
+# restore boot partition
 # ------------------------------------------------------------------------------
-do_sysrest() {
-    # get the tar file names
-    local froot="$1" fuser="$2" fhome="$3"
-    if [ "${fuser:-+}" = '+' ] ; then
-        fuser="${froot/_root_/_usr_}"
-        [ "$fuser" = "$froot" ] && fuser=
-    fi
-    if [ "${fhome:-+}" = '+' ] ; then
-        fhome="${froot/_root_/_home_}"
-        [ "${fhome:-+}" = '+' -o "$fhome" = '-' ] && fhome="${fuser/_usr_/_home_}"
-        [ "$fhome" = "$froot" ] && fhome=
-        [ "$fhome" = "$fuser" ] && fhome=
-    fi
+run_boot() {
+    [ "$CEN_OPT_BOOT" = '+' ] && return
 
-    # check the file args
-    do_chk_file "$froot" ; froot="$_do_chk_file"
-    do_chk_file "$fuser" ; fuser="$_do_chk_file"
-    do_chk_file "$fhome" ; fhome="$_do_chk_file"
-    error -q
-
-    # any tar file argument given?
-    local fmount fstyp fname="$froot"
-    [ -z "$fname" ] && fname="$fuser"
-    [ -z "$fname" ] && fname="$fhome"
-    message -a "System restore: ${froot:+/root} ${fuser:+/usr} ${fhome:+/home}"
-
-    # do we need a partition? Yes for --format --grub --label
-    [ -n "$CEN_FLG_MKFS$CEN_FLG_GRUB" -o "${CEN_FLG_LABEL:--}" != '-' -o \
-      -n "$CEN_FLG_PART" ] && do_chk_part
-
-    # do we need a mountpoint? Yes if no partition given
-    if [ -z "$CEN_FLG_GRUB" -a -z "$fname" ] ; then
-        CEN_FLG_MOUNT=
-    elif [ -z "$CEN_FLG_MOUNT" ] ; then
-        local devn="${CEN_FLG_PART##*/}"
-        if [ -z "$devn" ] ; then
-            error "A mount point must be specified"
+    local fboot="$DAT_FILE_BOOT"
+    if [ -z "$fboot" ] ; then
+        if [ "${1:--}" = '-' ] ; then
+            [ -n "$CEN_OPT_CLONE" ] && return 0
+            nres=1
         else
-            CEN_FLG_MOUNT="/mnt/$devn"
+            do_chk_file fboot "$1" || return
         fi
     fi
 
-    # can we proceed?
-    do_chk_swap
+    if [ -z "$nres" ] ; then
+        confirm -a -f $"Restore '%s' partition" "$CEN_OPT_BOOT" || quit -t
+    fi
+    do_destination "$CEN_OPT_BOOT" || return
+
+    do_untar "$DAT_DESTINATION" "$fboot"
+    do_clone "$DAT_DESTINATION"
+}
+
+# ------------------------------------------------------------------------------
+# Rename running system
+# ------------------------------------------------------------------------------
+run_clone_old() {
+    [ -n "$DAT_BOOT_CLONE" -o -n "$DAT_ROOT_CLONE" ] && return 0
+    [ "$CEN_OPT_RESTORE" != '/' ] &&
+        quit -e -p $"Use '%s' for\nan in-place rename of the running system" \
+                   "$CEN_NAME -clone=$CEN_OPT_CLONE --restore=/"
+    location -e -s DAT_DEST_BOOT '[boot]' || return
+    do_clone "$DAT_DEST_BOOT" '/'
+
+    [ "$CEN_OPT_RESTORE" != '/' ] &&
+        quit -e -p $"Use '%s' for\nan in-place rename of the running system" \
+                   "$CEN_NAME -clone=$CEN_OPT_CLONE --restore=/"
+    do_destination "$CEN_OPT_RESTORE" || return
+}
+
+run_clone() {
+    [ -n "$DAT_BOOT_CLONE" -o -n "$DAT_ROOT_CLONE" ] && return 0
+    [ -z "$CEN_OPT_RESTORE" ] &&
+        quit -e -p $"Use '%s' for\nan in-place rename of the running system" \
+                   "$CEN_NAME -clone=$CEN_OPT_CLONE --restore=/"
+    do_destination "$CEN_OPT_RESTORE" || return
+
+    location -b "$DAT_DESTINATION" -f -d "$CEN_OPT_DIST" -m -s DAT_DEST_ROOT 'Root'
+    if [ "${DAT_DEST_ROOT:--}" = '-' ] ; then
+        error $"Missing 'Root' volume" ; return 1
+    fi
+
+    case "${CEN_OPT_BOOT:-+}" in
+    -)  DAT_DEST_BOOT='-' ;;
+    +)  location -b "$DAT_DESTINATION" -e -s DAT_DEST_BOOT '[boot]' || return ;;
+    *)  folder "$CEN_OPT_BOOT" && DAT_DEST_BOOT="$CEN_OPT_BOOT" || return
+    esac
+    do_clone "$DAT_DEST_BOOT" "$DAT_DEST_ROOT"
+}
+
+# ------------------------------------------------------------------------------
+# Extract extra archives
+# ------------------------------------------------------------------------------
+run_extract() {
+    do_ntfsclone "$@" || return                     # handle windows image
+    do_destination "$CEN_OPT_EXTRACT" || return
+
+    local curr list=()
+    for curr in "$@" ; do
+        do_chk_file curr "$curr" && list+=("$curr")
+    done
     error -t || return
+    do_label "$curr"                                # init default label
+    pluralize -s curr -- "${#list[@]}" $"file" $"files"
+    confirm -a -f $"Restore %s to '%s'" "$curr" "$DAT_DESTINATION" || quit -t
+    for curr in "${list[@]}" ; do
+        do_untar "$DAT_DESTINATION" "$curr" || return
+    done
+}
 
-    # --- format and label ---
+# ------------------------------------------------------------------------------
+# format partitions: [-f]
+# ------------------------------------------------------------------------------
+#   The -f option is used by run_part to handel formatting after partitioning
+# ------------------------------------------------------------------------------
+run_format() {
+    if [ -n "$CEN_OPT_PART" ] ; then
+        [ -n "$1" ] || return
+    elif [ -z "$CEN_OPT_BOOT$CEN_OPT_GRUB$CEN_OPT_RESTORE$CEN_OPT_EXTRACT" ] ; then
+        quit -e $"Option '--format' needs '--boot|--grub|--extract|--restore'"
+    fi
+    local par1="$CEN_OPT_BOOT"    par2="$CEN_OPT_RESTORE" \
+          par3="$CEN_OPT_EXTRACT" parg="$CEN_OPT_GRUB"
 
-    if [ -z "$CEN_FLG_PART" -a -n "$CEN_FLG_MOUNT" ] ; then
-        # what filesystem?
-        system -r -p -f -s fstyp stat --format "%T" --file-system "$CEN_FLG_MOUNT"
-        case "$fstyp" in
-        ext3)       CEN_FLG_EXTFS=3 ;;
-        ext4)       CEN_FLG_EXTFS=4 ;;
-        btrfs)      ;;
-        *)          CEN_FLG_EXTFS=0
+    [ "$par2" = "$par3" ] && par3=
+    [ "$par1" = "$par2" ] && par1=
+    [ "$parg" = "$par1" ] && parg=
+    [ "$parg" = "$par2" ] && parg=
+    [ "$parg" = "$par3" ] && parg=
+
+    case "$1" in
+    *_*_*)  do_label "$1" ;;
+    *)      do_label "$HOSTNAME"
+    esac
+    if [ -z "$DAT_FMT_VFAT" ] ; then
+        par1= ; par2="$CEN_OPT_RESTORE" ; par3= ; parg=
+    fi
+
+    do_format "$par1" "$DAT_FMT_VFAT"   'boot'
+    do_format "$par2" "$CEN_OPT_FORMAT" 'root'
+    do_format "$par3" "$CEN_OPT_FORMAT" 'data'
+    do_format "$parg" 'ext4'            'grub'
+    error -t || return
+    if [ -z "$1" ] ; then
+        confirm $"WARNING formatting will override data. Continue anyhow" || quit -t
+    fi
+    do_format "$par1" "$DAT_FMT_VFAT"   'boot' + || return
+    do_format "$par2" "$CEN_OPT_FORMAT" 'root' + || return
+    do_format "$par3" "$CEN_OPT_FORMAT" 'data' + || return
+    do_format "$parg" 'ext4'            'grub' +
+}
+
+# ------------------------------------------------------------------------------
+# install bios grub
+# ------------------------------------------------------------------------------
+#   This does not install EFI grub, see centauriefilinux. Usually the EFI
+#   partition will be restored from a backup. A minimal grub config gets
+#   installed, see DAT_GRUB_MINIMAL.
+# ------------------------------------------------------------------------------
+run_grub() {
+    [ "${CEN_OPT_GRUB:--}" = '-' ] && return
+    do_destination "$CEN_OPT_GRUB" || return
+    findmount -- "$DAT_DESTINATION" ||
+        quit -e $"Found no device for mount-point:" "$DAT_DESTINATION"
+
+    local gloc conf args
+
+    if [ -d "$DAT_DESTINATION/dev" ] ; then     # root volume ...
+        gloc='--root' ; conf="$DAT_DESTINATION/boot"
+        remove -q "$conf"                       # remove potential symlink
+        conf+='/grub'
+        remove -q "$conf"                       # remove potential symlink
+    else                                        # boot partition ...
+        gloc='--boot' ; conf='grub'
+        remove -q "$conf"                       # remove potential symlink
+    fi
+    remove -d "$conf" || return                 # remove potential folder
+    folder -m "$conf" || return                 # (re-)create folder
+
+    args=("$gloc-directory" "$DAT_DESTINATION")
+    blkdevice -e -m -n 0 -- "$CEN_MOUNT_DEV" || return
+    message -a -p $"Installing grub (%s) ..." "${args[*]}"
+    system -e -p -- grub-install --target=i386-pc "${args[@]}" "$CEN_BLKDEVICE" || return
+
+    if [ -e "$DAT_GRUB_MINIMAL" ] ; then
+        copy "$DAT_GRUB_MINIMAL" "$conf/grub.cfg"
+        do_update "$DAT_DESTINATION"
+    fi
+
+    # TODO --format /dev ends up in /mnt
+}
+
+# ------------------------------------------------------------------------------
+#
+# ------------------------------------------------------------------------------
+run_image() {
+    system -e -p -r -s DAT_LOOPDEV -- losetup --partscan --show --find "$CEN_OPT_IMAGE" || return
+    context -h CEN_HOOK_QUIT DAT_HOOK_QUIT 'do_unmount'
+    local item part dest
+    for item in BOOT GRUB EXTRACT SWAP RESTORE PART ; do
+        eval dest=\$CEN_OPT_$item
+        case "${dest:--}" in
+        /img)   part="$DAT_LOOPDEV"
+                trace -a -c "image device" "$item=$part"
+                printf -v "CEN_OPT_$item" '%s' "$part" ;;
+        /img/?) part="${DAT_LOOPDEV}p${dest:5}"
+                [ -e "$part" ] || quit -e $"Partion not found in image:" "$dest"
+                trace -a -c "image partition" "$item=$part"
+                printf -v "CEN_OPT_$item" '%s' "$part" ;;
+        -)      ;;
+        *)      quit -e $"Invalid image reference:" "$dest"
         esac
-        if [ -n "$CEN_FLG_BOOT" ] ; then
-            CEN_FLG_EXTFS=0
-        elif [ -z "$CEN_FLG_EXTFS" ] ; then
-            if ! [ -d "$CEN_FLG_MOUNT/Volumes" ] ; then
-                warning -a "Found no '$CEN_FLG_MOUNT/Volumes' (not mounted?)"
-                CEN_FLG_EXTFS=0
-            fi
-        elif [ -z "$CEN_FLG_UNMOUNT" -a ! -d "$CEN_FLG_MOUNT/lost+found" ] ; then
-            warning -a "Found no '$CEN_FLG_MOUNT/lost+found' (not mounted?)"
+    done
+}
+
+# ------------------------------------------------------------------------------
+# partitioning: --part=<disk> <type> [<swap>]
+#
+# Arguments:    <disk>  drive-device or loop-device
+#               <type>  partitioning sheme:
+#                       msdos   dos-table, bios boot [swap] root partition
+#                       gpt     gpt-table, bios boot [swap] root partition
+#                       efi     gpt-table,  efi-boot [swap] root partition
+#               <swap>  swap size <size>M|<size>G (no swap if missing)
+# ------------------------------------------------------------------------------
+run_part() {
+    local mode="$1" disk="$CEN_OPT_PART" swap="${2:--}" args=() part mksw
+
+    case "${disk##*/}" in
+    sd?|hd?)    part="$disk" ;;
+    *)          part="${disk}p"
+    esac
+
+    case "${swap##*[0-9]}" in
+    -)      mode+='-' ;;                            # no swap
+    g|G)    swap="${swap%?}" ; ((swap *= 1024)) ;;
+    m|M)    swap="${swap%?}" ;;
+    *)      invoke -a 2 "<size>M|<size>G" ; return
+    esac
+    CEN_OPT_BOOT="${part}1" ; CEN_OPT_RESTORE="${part}3"
+
+    case "$mode" in
+    gpt)    mode='gpt' ; ((swap += 640))
+            args+=( mkpart _part0 0% 512MiB
+                    mkpart _part1 512MiB 640MiB
+                    mkpart _part2 640MiB ${swap}MiB
+                    mkpart _part3 ${swap}MiB 100%
+                    set 1 esp on set 2 bios_grub on
+                  )
+            mksw="${part}3" ; CEN_OPT_RESTORE="${part}4"
+            message -a -c $"partitioning" "boot=${part}1  swap=${part}3  root=${part}4"
+                  ;;
+    gpt-)   mode='gpt'
+            args+=( mkpart _part0 0% 512MiB
+                    mkpart _part1 512MiB 640MiB
+                    mkpart _part2 640MiB 100%
+                    set 1 esp on set 2 bios_grub on
+                  )
+             message -a -c $"partitioning" "boot=${part}1  root=${part}3"
+             ;;
+    efi)    mode='gpt' ; ((swap += 512))
+            args+=( mkpart _part0 0% 512MiB
+                    mkpart _part1 512MiB ${swap}MiB
+                    mkpart _part2 ${swap}MiB 100%
+                    set 1 esp on
+                  )
+            mksw="${part}2"
+            message -a -c $"partitioning" "boot=${part}1  swap=${part}2  root=${part}3"
+            ;;
+    efi-)   mode='gpt'
+            args+=( mkpart _part0 0% 512MiB
+                    mkpart _part1 512MiB 100%
+                    set 1 esp on
+                  )
+            CEN_OPT_RESTORE="${part}2"
+            message -a -c $"partitioning" "boot=${part}1  root=${part}2"
+            ;;
+    msdos)  mode='msdos' ; ((swap += 128))
+            args+=( mkpart primary 0% 128MiB
+                    mkpart primary 128MiB ${swap}MiB
+                    mkpart primary ${swap}MiB 100%
+                    set 1 boot on
+                  )
+            mksw="${part}2"
+            message -a -c $"partitioning" "boot=${part}1  swap=${part}2  root=${part}3"
+            ;;
+    msdos-) mode='msdos'
+            args+=( mkpart primary 0% 128MiB
+                    mkpart primary 128MiB 100%
+                    set 1 boot on
+                  )
+            CEN_OPT_RESTORE="${part}2"
+            message -a -c $"partitioning" "boot=${part}1  root=${part}2"
+            ;;
+    data-)  mode='msdos'
+            args+=( mkpart primary 0% 100%
+                    set 1 boot on
+                  )
+            CEN_OPT_BOOT=
+            DAT_FMT_VFAT= ; [ -z "$CEN_OPT_FORMAT" ] && CEN_OPT_FORMAT='exfat'
+            message -a -c $"partitioning" "data=${part}1"
+            ;;
+    *)      invoke -a 1 'efi|gpt|msdos|data' ; return
+    esac
+
+    do_chk_block "$disk" || return
+    confirm $"WARNING partitioning will override all data. Continue anyhow" || quit -t
+
+    system -e -p -g 0 -- dd if=/dev/zero of="$disk" bs=1M count=32 || return
+    system -e -p -g 0 -- parted --script -a optimal "$disk" mklabel "$mode" "${args[@]}" || return
+
+    # done if not formatting and no implied swap creation
+    if [ -z "$CEN_OPT_FORMAT" ] ; then
+        [ -z "$mksw" -o -n "$CEN_OPT_SWAP" ] && return
+    fi
+
+    # must reload partion info for format or swap
+    if [ -n "$CEN_OPT_IMAGE" ] ; then
+        system -q -r -- losetup -d "$DAT_LOOPDEV" || return
+        mksw="${mksw#$DAT_LOOPDEV}"
+        timer -w 0.3
+        system -e -p -r -s DAT_LOOPDEV -- \
+               losetup --partscan --show --find "$CEN_OPT_IMAGE" || return
+        [ -n "$mksw" ] && CEN_OPT_SWAP="$DAT_LOOPDEV$mksw"
+        [ -z "$DAT_FMT_VFAT" ] && CEN_OPT_RESTORE='/img/1'
+    else
+        system -e -p -r -- partprobe "$disk" || return
+        timer -w 0.5
+        [ -n "$mksw" ] && CEN_OPT_SWAP="$mksw"
+        [ -z "$DAT_FMT_VFAT" ] && CEN_OPT_RESTORE="${part}1"
+    fi
+
+    [ -n "$CEN_OPT_SWAP" ] && run_swap -f
+    [ -n "$CEN_OPT_FORMAT" ] && run_format -f
+}
+
+# ------------------------------------------------------------------------------
+#
+# ------------------------------------------------------------------------------
+run_restore() {
+    do_destination "$CEN_OPT_RESTORE" || return
+
+    # get file template from 1st name found
+    local item fname froot fuser fhome fboot
+    for item in "$@" ; do
+        [[ "$item" =~ (.*/)?(.*_)?(boot|root|home|usr)(_.*|\..*) ]] || continue
+        fname="${BASH_REMATCH[1]}${BASH_REMATCH[2]}::::${BASH_REMATCH[4]}" ; break
+    done
+
+    # get the tar file names
+    item=
+    do_chk_file froot "$1" 'root' "$fname" && item+=' root'
+    do_chk_file fuser "$2" 'usr'  "$fname" && item+=' usr'
+    do_chk_file fhome "$3" 'home' "$fname" && item+=' home'
+    [ -n "$CEN_OPT_DIST" -o -n "$CEN_OPT_BOOT" ] &&
+        do_chk_file fboot "$4" 'boot' "$fname" && item+=' boot'
+    error -q
+    if [ -z "$item" ] ; then
+        [ -z "$CEN_OPT_CLONE" ] && item='message' || item='trace'
+        $item -a $"Nothing to restore" ; return
+    else
+        message -a $"System restore:" "$item"
+    fi
+
+    # option --dist, create volumes
+    if [ -n "$CEN_OPT_DIST" ] ; then
+        local vols="$DAT_DESTINATION/mnt/vol0/Volumes" crea=()
+        [ ! -d "$vols" ] && vols="$DAT_DESTINATION/Volumes"
+        [ ! -d "$vols" ] &&
+            quit -e -p $"Found no '%s' (%s)" "$vols" $"no btrfs?"
+        [ -d "$vols/Root-$CEN_OPT_DIST" ] || crea+=("$vols/Root-$CEN_OPT_DIST")
+        [ -d "$vols/Home-$CEN_OPT_DIST" ] || crea+=("$vols/Home-$CEN_OPT_DIST")
+        if [ -n "$crea" ] ; then
+            confirm $"Create btrfs subvolumes " || quit -t
+            for item in "${crea[@]}" ; do
+                system -e -p -g 0 -- btrfs subvolume create "$item" || return
+            done
         fi
     fi
 
-    do_label "$fname"
-    [ -n "$CEN_FLG_SWAP" ] && do_swap
-    [ -n "$CEN_FLG_PART" ] && do_format
-    [ -z "$CEN_FLG_MOUNT" ] && quit "Nothing to restore"
-
-    # --- mount and set folders ---
-
-    if [ -n "$CEN_FLG_PART" ] ; then
-       message -a "Mounting '$CEN_FLG_PART' at '$CEN_FLG_MOUNT' ..."
-       [ -z "$CEN_FLG_EXTFS" ] && fmount='-o subvol=/'
-       system -f -p -r -- mount "$CEN_FLG_PART" "$CEN_FLG_MOUNT" $fmount
+    if [ -n "$CEN_OPT_BOOT" ] ; then                # see run_boot
+         DAT_FILE_BOOT="$fboot" ; fboot=
+    elif [ "$DAT_DESTINATION" != '/' ] ; then       # boot needs EFI mount
+        fboot=
     fi
-
-    folder -c -f "$CEN_FLG_MOUNT" ; CEN_FLG_MOUNT="$PWD"
-    local proot='/' phome='/home' puser='/usr'
-    if [ -z "$CEN_FLG_EXTFS" ] ; then
-        local vroot="$CEN_DAT_VROOT" vhome="$CEN_DAT_VHOME"
-        if matchpath -d -o -s proot "$vroot-$CEN_FLG_DIST" "$vroot" ; then
-            puser="$proot/usr"
-            matchpath -d -o -s phome "$vhome-$CEN_FLG_DIST" "$vhome" ||
-                fatal "Missing 'Home' volume"
-            message -a "btrfs volumes: $proot $puser $phome"
-        elif [ -n "$CEN_FLG_DIST" ] ; then
-            fatal "Missing 'Root' volume:" "$vroot-$CEN_FLG_DIST"
-        fi
-    fi
+    do_locations "$froot" "$fuser" "$fhome" "$fboot"
+    error -t || return
+    confirm -a -f $"Restore data to '%s'" "$DAT_DESTINATION" || quit -t
 
     # --- restore root ---
 
-    if [ -n "$froot" ] ; then
-       confirm -a "Restore data to $CEN_FLG_MOUNT" || quit -t
-       # restore but exclude grub stuff
-       do_restore "$proot"  "$froot" \
-            '--exclude=./boot/grub/locale'  \
-            '--exclude=./boot/grub/fonts'   \
-            '--exclude=./boot/grub/i386-pc' \
-            '--exclude=./boot/grub/x86_64-efi' \
-            '--exclude=./boot/grub/grubenv' \
-            '--exclude=./boot/grub/*~'      \
-            '--exclude=./boot/grub/*.o'     \
-            '--exclude=./boot/grub/*.img'   \
-            '--exclude=./boot/grub/*.pf2'   \
-            '--exclude=./boot/grub/*.mod'   \
-            '--exclude=./boot/grub/*.lst'
-       # create required folders
-       do_fixup
-    fi
+    do_untar "$DAT_DEST_ROOT" "$froot" \
+        '--exclude=./boot/grub/locale'  \
+        '--exclude=./boot/grub/fonts'   \
+        '--exclude=./boot/grub/i386-pc' \
+        '--exclude=./boot/grub/x86_64-efi' \
+        '--exclude=./boot/grub/grubenv' \
+        '--exclude=./boot/grub/*~'      \
+        '--exclude=./boot/grub/*.o'     \
+        '--exclude=./boot/grub/*.img'   \
+        '--exclude=./boot/grub/*.pf2'   \
+        '--exclude=./boot/grub/*.mod'   \
+        '--exclude=./boot/grub/*.lst' || return
 
     # --- restore usr and home ---
 
-    do_restore "$puser" "$fuser"
-    do_restore "$phome" "$fhome"
-    message -a "Waiting for queued disk writes to complete..."
-    system -e -p -- sync
+    do_untar "$DAT_DEST_USER" "$fuser" || return
+    do_untar "$DAT_DEST_HOME" "$fhome" || return
+    # this is only for the current system where EFI is mounted
+    do_untar "${DAT_DEST_BOOT%/*}" "$fboot" "./image-$CEN_OPT_DIST" || return
 
-    # --- clone ---
-
-    folder -c -f "$CEN_FLG_MOUNT${CEN_FLG_MOUNT:+/}$proot"
-    folder -m -f 'home'
-    [ -n "$CEN_FLG_CLONE" -o -n "$CEN_FLG_ALL" ] && do_rename
-
-    # --- grub install ---
-
-    if [ -n "$CEN_FLG_GRUB" ] ; then
-       [ -n "$CEN_FLG_PART"  ] || fatal "Need device for grub (see --partition)"
-       blkdevice -f -m -p -- "$CEN_FLG_PART"
-       [ "${CEN_FLG_MOUNT:--}" = '-' ] && CEN_FLG_MOUNT="${CEN_BLKDEVICE[3]}"
-       [ -d "$CEN_FLG_MOUNT" ] || fatal "Need mount-point for grub"
-       local gloc='--root-directory'
-       if [ -e 'boot' -o -h 'boot' ] ; then
-            [ -h 'boot/grub' ]  && folder -f 'boot/grub'    # valid link?
-           folder -c -f 'boot' ; gloc='--boot-directory'
-       fi
-       message -a "Installing grub ($gloc=$PWD) ..."
-       system -e -p -- grub-install --target=i386-pc $gloc="$PWD" "$CEN_BLKDEVICE"
-    fi
-
-    # --- unmount ---
-
-    folder -c -f '/'
-    if [ -n "$CEN_FLG_PART" -a -n "$CEN_FLG_MOUNT" -a -n "$CEN_FLG_UNMOUNT" ] ; then
-       message -a "Unmounting '$CEN_FLG_PART' from '$CEN_FLG_MOUNT' ..."
-       system -q umount "$CEN_FLG_PART"
-    fi
-    return 0
+    message -a $"Waiting for queued disk writes to complete..."
+    system -e -p -g 0 -- sync || return
+    do_clone "$DAT_DEST_BOOT" "$DAT_DEST_ROOT"
 }
 
 # ------------------------------------------------------------------------------
-# run it ...
+# Create swap file-system: [-f]
 # ------------------------------------------------------------------------------
-run() {
-    context -r
-    umask 22                # create dirs with 0x755
+run_swap() {
+    [ "${CEN_OPT_SWAP:--}" = '-' ] && return
+    do_chk_block "$CEN_OPT_SWAP" || return
+    do_label "$HOSTNAME"
+    [ -n "$DAT_SWAP_LABEL" ] &&
+        message -a -p $"Will label swap partition as: %s" "$DAT_SWAP_LABEL"
 
-    # rename a system
-    if [ -n "$CEN_FLG_CLONE" -a $# = 0 ] ; then
-        [ -n "$CEN_FLG_BOOT$CEN_FLG_LABEL$CEN_FLG_MKFS" ] &&
-            fatal "Invalid option(s) used with --restore --clone"
-        local dest="${CEN_FLG_REST:-/}"
-        [ "$dest" -ef '/' ] && dest='/'
-        folder -c -f "$dest"
-        do_rename
-
-    # restore (data) backup(s)
-    elif [ -n "$CEN_FLG_REST" -o -n "$CEN_FLG_BOOT" ] ; then
-        [ -n "$CEN_FLG_LABEL$CEN_FLG_MKFS$CEN_FLG_PART$CEN_FLG_MOUNT" -o \
-          -n "$CEN_FLG_EXTFS$CEN_FLG_GRUB$CEN_FLG_UNMOUNT" ] &&
-            fatal "Invalid option(s) used with --restore"
-        local curr base="$PWD" marg='+'
-        if [ -n "$CEN_FLG_BOOT" ] ; then
-            marg='-' ; CEN_FLG_REST="$CEN_FLG_BOOT"
-        elif [ -n "$CEN_FLG_CLONE" ] ; then
-            fatal "Cannot use --clone with --restore"
-        fi
-        arguments 1 "$marg" "$@" || return
-
-        if [ "${CEN_FLG_REST::5}" = '/dev/' ] ; then
-            do_chk_block "$CEN_FLG_REST" || return
-        else
-            folder -c "$CEN_FLG_REST" || return
-            CEN_FLG_REST="$PWD"
-        fi
-
-        for curr in "$@" ; do
-            folder -f -c '/'
-            [ "${curr::1}" = '/' ] || curr="$base/$curr"
-            do_chk_file "$curr" || continue
-            do_restore "$CEN_FLG_REST" "$_do_chk_file"
-        done
-
-        # rewrite grub.cfg/cmdline.txt but not fstab
-        if [ -n "$CEN_FLG_BOOT" -a -n "$CEN_FLG_CLONE" ] ; then
-            do_update "$CEN_FLG_CLONE"
-        fi
-
-    # restore a system
+    if [ "$1" != '-f' ] ; then
+        confirm -a -f $"Create swap space on '%s'" "$CEN_OPT_SWAP" || quit -t
+    fi
+    if [ -z "$DAT_SWAP_LABEL" ] ; then
+        system -f -p mkswap "$CEN_OPT_SWAP"
     else
-        arguments 1 3 "$@" || return
-        context -r
-        do_sysrest "$@"
+        system -f -p mkswap -L "$DAT_SWAP_LABEL" "$CEN_OPT_SWAP"
     fi
 }
 
@@ -774,91 +1043,164 @@ run() {
 options() {
     case "$CEN_ACTION" in
 
-    -3|--ext3)
-        optarg "ext3"       CEN_FLG_MKFS && CEN_FLG_EXTFS=3 ;;
-    -4|--ext4)
-        optarg "ext4"       CEN_FLG_MKFS && CEN_FLG_EXTFS=4 ;;
-    -A|--all)
-        optarg "all"        CEN_FLG_PART -t && CEN_FLG_ALL=1 ;;
+    -2|--f2f|--f2fs)
+        optarg 'format'     -   - 'f2fs' ;;
+    -4|--ext|--ext4)
+        optarg 'format'     -   - 'ext4' ;;
     -B|--boo|--boot)
-        optarg 'boot'       CEN_FLG_BOOT -t ;;
+        optarg 'boot'       -   -t ;;
     -C|--clo*)
-        optarg "clone"      CEN_FLG_CLONE[] -t ;;
+        optarg 'clone'      -   -h ;;
     -D|--dis*)
-        optarg "dist"       CEN_FLG_DIST '[^/ ]*' ;;
+        optarg 'dist'       -   '[^/ ]*' ;;
     -F|--for*|--fmt)
-        optarg "format"     CEN_FLG_MKFS ;;
+        optarg 'format'     -   - 'btrfs' ;;
     -G|--gru*)
-        optarg "grub"       CEN_FLG_GRUB ;;
+        optarg 'grub'       -   -t ;;
     -I|--ima*)
-        optarg "image"      CEN_FLG_IMAGE -t ;;
+        optarg 'image'      -   -t ;;
     -L|--lab*)
-        optarg "label"      CEN_FLG_LABEL -t ;;
-    -M|--mou*)
-        optarg "mount"      CEN_FLG_MOUNT -t ;;
+        optarg 'label'      -   -h ;;
     -P|--par*)
-        optarg "partition"  CEN_FLG_PART -t ;;
+        optarg 'partition'  CEN_OPT_PART -t ;;
     -R|--res*)
-        optarg "restore"    CEN_FLG_REST -t ;;
+        optarg 'restore'    -   -t ;;
     -S|--swa*)
-        optarg "swap"       CEN_FLG_SWAP -t ;;
-    -U|--unm*)
-        optarg "unmount"    CEN_FLG_UNMOUNT ;;
+        optarg 'swap'       -   -t ;;
+    -X|--ext*)
+        optarg 'extract'    -   -t ;;
 
     # after option processing
-    "")
-        if [ -n "$CEN_FLG_ALL" ] ; then
-            CEN_FLG_MKFS=1
-            CEN_FLG_GRUB=1
-        fi
-        if [ -n "$CEN_FLG_MOUNT" ] ; then
-            prettypath -c -e -f -s CEN_FLG_MOUNT -- "$CEN_FLG_MOUNT"
-        elif [ -n "$CEN_FLG_IMAGE" ] ; then
-            fatal "Option '--image' needs '--mount'"
-        fi
+    '')
+        # restore|image|xtract are mutually exclusive
+        [ -n "$CEN_OPT_RESTORE" ] && dispatch -m 'restore' 1 .
+        [ -n "$CEN_OPT_EXTRACT" ] && dispatch -m 'extract' 1 +
+        [ -n "$CEN_OPT_PART" ]    && dispatch -m 'part'    1 2
 
-        if [ -n "$CEN_FLG_IMAGE" ] ; then
-            [ -n "$CEN_FLG_PART" ] && fatal "Cannot use '--partion' with '--image'"
-            [ -n "$CEN_FLG_GRUB" ] && fatal "Cannot use '--grub' with '--image'"
-            prettypath -c -e -f -s CEN_FLG_IMAGE -- "$CEN_FLG_IMAGE"
-        fi
-        CEN_DAT_DOMAIN="${CEN_FLG_CLONE#*.}"
-        [ "$CEN_DAT_DOMAIN" = "$CEN_FLG_CLONE" ] && CEN_DAT_DOMAIN=
-        CEN_FLG_CLONE="${CEN_FLG_CLONE%%.*}"
+        # special, run before main action
+        [ -n "$CEN_OPT_IMAGE" ]   && dispatch -s 'image'   0 -
+        [ -n "$CEN_OPT_FORMAT" ]  && dispatch -s 'format'  0 -
+
+        # will run 1st seen
+        [ -n "$CEN_OPT_BOOT" ]    && dispatch    'boot'    1 -
+        [ -n "$CEN_OPT_GRUB" ]    && dispatch    'grub'    0 -
+        [ -n "$CEN_OPT_CLONE" ]   && dispatch    'clone'   0 -
+        [ -n "$CEN_OPT_SWAP" ]    && dispatch    'swap'    0 -
     esac
 }
 
 # ------------------------------------------------------------------------------
+# dispatch main action: [-m] <name> <min> <max> <arg>...
+#
+#       centaurestore always executes exactly one main action run_<name> or
+#       if run_default. This uses 'CEN_HOOK_ACTIONS' to call 'dispatch -r'
+#       when main() executes run().
+# ------------------------------------------------------------------------------
+DAT_DISPATCH_FRST=()
+DAT_DISPATCH_SCND=()
+dispatch() {
+    # this is called from CEN_HOOK_ACTIONS to run a main action
+    if [ "$1" = '-r' ] ; then
+        if [ -z "$DAT_DISPATCH" -a -z "$DAT_DISPATCH_FRST" ] ; then
+            error -r -p -z $"Don't know what to do, try '%q --help'" "$CEN_NAME"
+        else
+            shift                                   # remove -r
+            context -r -t +                         # root only, trap handler
+            umask 22                                # create dirs with 0x755
+            local disp optv
+            for disp in "${DAT_DISPATCH_FRST[@]}" "$DAT_DISPATCH" \
+                        "${DAT_DISPATCH_SCND[@]}" ; do
+                error -q
+                eval optv="\$CEN_OPT_${disp^^}"
+                [ -n "$optv" ] && invoke "$disp" "run_$disp" "$@"
+            done
+        fi
+        quit
+
+    # mutually exclusive actions
+    elif [ "$1" = '-m' ] ; then
+        [ -n "$DAT_DISPATCH" ] &&
+            quit -e -p $"Cannot combine options '--%s' and '--%s'" "$2" "$DAT_DISPATCH"
+        shift
+    elif [ "$1" = '-s' ] ; then
+        DAT_DISPATCH_FRST+=("$2") ; return
+    elif [ -n "$DAT_DISPATCH" ] ; then
+        DAT_DISPATCH_SCND+=("$1") ; return
+    fi
+
+    # register the 1st action seen
+    DAT_DISPATCH="$1"
+    CEN_RUN_MIN_ARGS="$2"
+    if [ "$3" = '.' ] ; then
+        [ -n "$CEN_OPT_CLONE" ] && CEN_RUN_MIN_ARGS=0
+        [ -z "$CEN_OPT_DIST" ] && CEN_RUN_MAX_ARGS=3 || CEN_RUN_MAX_ARGS=4
+    else
+        CEN_RUN_MAX_ARGS="$3"
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # print usage info
+#
+# $CEN_NAME -B /dev/sdb1 -R /dev/sdb4 root.tgz usr.tgz home.tgz boot.tgz
+# $CEN_NAME -B /dev/sdb1 -R /dev/sdb4 root.tgz
+# $CEN_NAME -B /dev/sdb1 -R /dev/sdb4 root.tgz -C newname
+# $CEN_NAME -B /dev/sdb1 boot.tgz
+#
+# $CEN_NAME -X /dev/sdb4 export.tgz shared.txz
+#
+# $CEN_NAME -F /dev/sdb1 -G /dev/sdb1 -R + root.tgz
+#
+# $CEN_NAME -B /dev/sdb1 -R /dev/sdb4 root.tgz -C newname
 # ------------------------------------------------------------------------------
 usage() {
     usagecat << !EOF
-usage: $CEN_NAME [options...] -|<root> [-|+|<user> [-|+|<home>]]
+usage: (1) $CEN_NAME <option>... --partition /dev/<disk> <kind> [<swap>]
+       °   $CEN_NAME <option>... --partition /img --image <file> <kind> [<swap>]
+       (2) $CEN_NAME <option>... --restore /dev/<part> <root> [<usr> [<home> [<boot>]]]
+       °   $CEN_NAME <option>... --restore /img/<indx> --image <file> <root> ...
+       (3) $CEN_NAME <option>... --extract /dev/<part> <arch>...
+       °   $CEN_NAME <option>... --extract /img/<indx> --image <file> <arch> ...
 
        $CEN_TITLE.
 
 $CEN_USE_OPTIONS
 
-       -3 --ext3            make ext3 filesystem
-       -4 --ext4            make ext4 filesystem
-       -A --all     <part>  automatic formatting grub and clone
-       -B --boot    <fldr>  restore EFI boot partition
-       -C --clone   <name>  prepare a clone with hostname=<name>. Up to three
-                            extra --clone options can follow to override (1)
-                            the boot partition (2) the root partion and (3)
-                            to specifiy a path to 'grub.cfg'. See example (8)
+       ••• main options (required, mutually exclusive) •••
+
+       -P --partition       disk partitioning
+       -R --restore         restore system backup
+       -X --extract         extract archive(s) to disk
+
+       ••• additional options •••
+
+       -F --format          make 'btrfs' filesystem
+       -2 --fs2fs           (instead of --format) make 'f2fs' filesystem
+       -4 --ext4            (instead of --format) make 'ext4' filesystem
+
+       -B --boot    <dest>  restore EFI boot partition
+       -C --clone   <name>  clone/rename system with hostname=<name>
        -D --dist    <nick>  add distribution name to root/home btrfs-volumes
-       -F --format          make btrfs filesystem
        -G --grub            run BIOS grub-install (i386-pc target)
        -I --image   <file>  restore to an image file
        -L --label   <text>  override partition label    (- for no label)
-       -M --mount   <fldr>  alternate mount point       (must exist)
-       -P --part    <part>  use the given partition     (example: sdb3)
-       -R --restore <fldr>  restore archive(s) to a folder
        -S --swap    <part>  create a swap partition
-       -U --unmount         unmount after restore
 
 arguments:
+       <dest>               partition: /dev/<part>  -or- image: /img/<indx>
+       <part>               a partition name            (example: "sda3")
+       <indx>               partion number in image     (1, 2, ...)
+       <disk>               a block device              (example: "nvme0n1")
+
+       <arch>               a tar archive <file>, can be compressed
+       <root>               system root <arch>  -or-  "-" to skip
+       <usr>                system usr  <arch>  -or-  "-" to skip
+       °                                <>      -or-  "+" automatic file path
+       <home>               system home <arch>  -or-  "-"   -or-  "+"
+       <boot>               system boot <arch>  -or-  "-"   -or-  "+"
+
+       $CEN_NAME [options...] -|<root> [-|+|<user> [-|+|<home>]]
+
        <file>               a file path
        <fldr>               a folder path
        <name>               a host name or '-' (from label) or '+' (fixup only)
@@ -900,6 +1242,55 @@ passes the base folder of grub.cfg.
 An EFI boot partition is restored using form (9). The BIOS version of grub can
 be installed using form (10).
 !EOF
+
+    usagecat -v "more:  Use -- for partition and sub-volume information." << !EOF
+
+mount:  Traditionally Linux used partitions to keep data seperate and mounted these
+        at some well known locations (mount points). Some newer file systems (like
+        btrfs) can create logical sub-volumes in formatted partitions. These can be
+        mounted like partitions.
+
+        centauri-tools identify volumes by file-system labels (see below) for more
+        portability. This contrasts with most linux distros that are using UUIDs.
+
+
+volume: centauri-tools use partions and/or (sub-)volumes. Formatted partions and
+        sub-volumes are called volumes and have assigned a traditional name (in
+        uppercase).
+
+    Name    mount      fstab  Purpose  Export  Description
+    ------- ---------- ------ -------- ------- --------------------------------
+    ROOT    /          yes    system   no      contains the operatings system
+    BOOT    /boot/efi  (yes)  boot     no      stuff needed for booting
+    HOME    /home      (yes)  private  server  data belonging to users
+    EXPORT  /export    no     public   yes     world readable data
+    SHARED  /shared    no     shared   yes     data belonging to user groups
+    BACKUP  /backup    no     backup   no      space to store backup data
+    DATA    /data      no     data     optinal extra data, no specific purpose
+    SWAP    -          (no)   swap     no      swap space for transient data
+    ------- ----------- -------- ------- --------------------------------------
+
+fstab:  The tradional mount table contains only entries that are not handled by
+        either systemd nor centaurimounter. BOOT and HOME are usually added to
+        fstab as a fall-back. SWAP partions are not added (detected by systemd).
+        Swap-files not added either, they would be handled by centauriswap.
+
+label:  The centauri-tools handle some pre-defined partitions. These have file-
+        system labels assigned and are mounted via fstab or centaurimounter. The
+        labels get updated by $CEN_NAME on restore or rename. $CEN_NAME
+        also updates grub.cfg, systemd boot, raspberrypi boot and /etc/fstab.
+
+    Label          § Type     Mand    Description
+    -------------- § -------- ------- ------------------------
+    <host>_ROOT    § ext4     yes     only if not using btrfs
+    <host>_BOOT    § vfat     (yes)   only for efi or firmware
+    <host>_VOL0    § btrfs    yes     only used with btrfs
+    <host>_VOL<n>  § btrfs    no      additional physical volumes
+    <host>_SWAP    § swao     no      transient data
+    <host>_DATA    § any      no      extra
+    -------------- § -------- ------- ------------------------
+!EOF
+
 }
 
 # ------------------------------------------------------------------------------

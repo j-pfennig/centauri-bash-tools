@@ -5,7 +5,7 @@ CEN_TITLE=$"Installer tool for centaurisoho linux machines"
 
 # Import the bash library
 if [ -z "$CEN_NAME" ] ; then
-    PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m con -t -y - '0.22:6' || exit 2
+    PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m con -t -y - '0.23:6' || exit 2
 fi
 
 # Variable naming scopes ...
@@ -68,13 +68,15 @@ declare DAT_REPOSITORY DAT_RASPI
 # Protect the development system
 # ------------------------------------------------------------------------------
 allowInstall() {
-    # explicitly allowed ...
-    [ -n "$CEN_OPT_FORCE" ] && return 0
-    [ "$CEN_ACTION" = 'restore' ] && return 0
-
     # protect the development system ...
     local fcfg="$CEN_PERSISTENT/$CEN_NAME-conf"
     [ -f "$fcfg" ] && return 0
+
+    # explicitly allowed ...
+    if [ -n "$CEN_OPT_FORCE" ] ; then
+        create -- "$fcfg" ; return 0
+    fi
+    [ "$CEN_ACTION" = 'restore' ] && return 0
 
     local mesg=$"I am not daring to execute '%s' on this system. To allow"
           mesg+='\n'
@@ -302,6 +304,8 @@ cfg_apply() {
         get_yesno -y $"Update configuration of local host" || quit -a -u
         wrks="$SOHO_WORKSPACE" ; dest='/'
         [ "$name" = '-' ] && name="$HOSTNAME" || SOHO_HOST="$name"
+    elif [ "$para" = '+' ] ; then
+        get_yesno -n $"Reconfigure the restored system" || return
     else
 
         # install to an image? Get workspace and params  ...
@@ -352,8 +356,7 @@ cfg_apply() {
             else
                 cfg_params -q "$dcfg" || return 1
             fi
-#            confirm -d - -p $" [y/n/q]? " -v $"yes no quit" $"Apply configuration"
-             get_yesno -q $"Apply configuration changes"
+            get_yesno -q $"Apply configuration changes"
             case $? in
             0)  break ;;
             1)  ;;
@@ -362,8 +365,6 @@ cfg_apply() {
         done
         ;;
     -)  cfg_params -r || return 1 ;;
-    #-)  get_yesno -q $"Apply configuration changes" || quit -a -u
-    #    cfg_params -r || return 1 ;;
     *)  cfg_params -r "$para" || return 1
     esac
     if [ "$para" != '-' ] ; then
@@ -419,7 +420,7 @@ cfg_wlan() {
     local host="${1:-$HOSTNAME}" ; shift
     local pasw="${SOHO_NET_WLAN_PW:--}"
     if [ "$pasw" = '-' ] ; then
-        warning $"WLAN password set to random, use 'centaurinetgen' to fix"
+        warning $"WLAN password set to random, use 'centaurinetgen wpa' to fix (after reboot)"
     else
         trace -a $"Setting wlan password"
     fi
@@ -589,12 +590,14 @@ get_netcache() {
 #   -l      symlink @shared (implies -e)
 # ------------------------------------------------------------------------------
 get_repository() {
-    local conf
+    local conf notf
     # get from configuration ...
-    [ -z "$DAT_REPOSITORY" -a -n "$SOHO_CONFIG" ] &&
+    if [ -z "$DAT_REPOSITORY" -a -n "$SOHO_CONFIG" ] ; then
         for conf in "$SOHO_CONFIG" "$SOHO_DNAME" ; do
             repository -q folder DAT_REPOSITORY "$SOHO_DISTRO" "$conf" - "$DAT_SOHO_ROOT" && break
         done
+        [ "$1" = '-e' ] && [ ! -d "$DAT_REPOSITORY" ] && notf=1
+    fi
 
     # or get current repository ...
     if [ -z "$DAT_REPOSITORY" -a "$1" != '-l' ] && [ -d "$CEN_ROOT/shared" ] ; then
@@ -603,16 +606,16 @@ get_repository() {
         trace -a -c ' ' "$DAT_REPOSITORY" ; return 0
     fi
 
-    if [ -n "$DAT_REPOSITORY" ] ; then
+    if [ -n "$DAT_REPOSITORY" -a -z "$notf" ] ; then
         [ "$1" = '-l' ] && symlink -f -n -- "$DAT_REPOSITORY/@shared" "$CEN_ROOT/shared"
         trace -a -c " $1" "$DAT_REPOSITORY" ; return 0
     elif [ "$1" != '-e' -a "$1" != '-l' ] ; then
-        error -n "Missing '$CEN_ROOT/shared', please create manually by" \
-                 "running: ln -s $CEN_ROOT/configs/<dist>/<conf>/@shared $CEN_ROOT/shared"
+        error -m $"Missing '$CEN_ROOT/shared', please create manually by" \
+                 $"running:"" ln -s $CEN_ROOT/configs/<dist>/<conf>/@shared $CEN_ROOT/shared"
     elif [ -n "$SOHO_CONFIG" ] ; then
-        error "Cannot find repository '%s' or '%s'" "$SOHO_DNAME" "$SOHO_CONFIG"
+        error -p $"Cannot find repository '%s'" "$SOHO_CONFIG"
     else
-        error "Cannot find repository"
+        error $"Cannot find repository"
     fi
     return 1
 }
@@ -1088,7 +1091,7 @@ copyFromRepo() {
       --) shift ; break ;;
       -c) get_repository || return 1                    # get repo path
           [ -d "$DAT_REPOSITORY/$2" ] && return 0
-          confirm -n -f "Host '%s' not found in repository. Continue anyhow" "$2" && return 0
+          confirm -n -f $"Host '%s' not found in repository. Continue anyhow" "$2" && return 0
           quit -a -u ;;
       -l) link=' -l' ;;                                 # make symlink
       -r) get_repository -l ; return ;;                 # return status
@@ -1097,8 +1100,8 @@ copyFromRepo() {
        *) _cen_abort - "$1"
       esac ; shift
     done
-    get_repository || return 1                          # get repo path
-    trace -a -c -- "$link$fupd" "$@"
+    get_repository -e || quit -t                        # get repo path
+    trace -a -c ' ' -- "$link$fupd" "$@"
 
     local dest="${2:--}" dflt="$3" name glob            # destination path
     if [ -n "$link" ] ; then
@@ -1133,7 +1136,7 @@ copyFromRepo() {
                                                         # get 1st existing file
     if ! matchpath -o -e -s repo -- "${glst[@]}" ; then
         case "$dflt" in
-        '') error "File not in repository:" "$1" ; return 1 ;;
+        '') error $"File not in repository:" "$1" ; return 1 ;;
         -)  return 1 ;;
         *)  copyFromRepo "$dflt" "$dest" ; return       # return status
         esac
@@ -1171,7 +1174,8 @@ outputMessage() {
     }
     ___mesgsec() {
         [ "${1::1}" = '[' ] || return 0
-        printf -v subs '%s%-14s %3s' "$pref" "$1" "${CEN_CONFIGFILE[2]}"
+        subs="${1##*#}" ; [ "$subs" = "$1" ] && subs=
+        printf -v subs '%s%-14s %3s %s' "$pref" "${1%% *}" "${CEN_CONFIGFILE[2]}" "$subs"
         text+=("$subs") ; return 0
     }
 
@@ -1262,7 +1266,7 @@ actionBackup() {
     #      root             # ext4 (debian bootstrap)
 
     if [ "${2:--}" = '-' ] ; then
-        invoke -w "Backup of 'root' only"
+        invoke -w $"Backup of 'root' only"
     elif [ -d "$aboo" ] ; then
         prettypath -s mptb -- "$aboo"
     else
@@ -1312,7 +1316,6 @@ actionBackup() {
             *)          opts=("$snap" -B "$mptr" archive "$item")
             esac
         fi
-        #message centauribackup -O "$curr/$file" "${opts[@]}" ; continue
         embed -t centauribackup -O "$curr/$file" "${opts[@]}"
     done
 
@@ -1565,7 +1568,12 @@ actionInstall() {
 }
 
 # ------------------------------------------------------------------------------
-# Message text: <mesg> [<file>|- [<pref>]]
+# Message text: <mesg> [<file>|- [<pref>] [<subs>]]
+#
+#   <mesg>      ini-file section
+#   <file>      output file
+#   <pref>      prefix for output lines (used to indent)
+#   <subs>      replaces '%1%' in output
 # ------------------------------------------------------------------------------
 actionMessage() {
     get_workspace -n || return                      # get base folder
@@ -1890,7 +1898,7 @@ actionRestore() {
     [ -n "$item" ] && get_value name "$name" - $"Set hostname of installed image"
     [ -z "$swap" ] && get_value swap "$swad" - $"Size of swap partition in GByte"
 
-    [[ "$name" =~ [a-z][-a-z]*[a-z] ]] || quit -e $"Invalid host name:" "$name"
+    isname -e -h -- "$name" || return
     [ "$name" = "$HOSTNAME" ] && quit -e $"Cannot use current host name"
     [ -n "${swap//[0-9]}" ] && quit -e $"Invalid swap size:" "$swap"
 
@@ -1900,14 +1908,14 @@ actionRestore() {
     elif [ "${#labl[@]}" != 2 ] ; then
         error -p $"Input data unusable (%s):" "$host" "$CEN_INPFILE" ; return
     fi
-
-    if [ "$fsys" = 'ext4' ] ; then
-        opts+=('-4')
-    else                                                # btrfs uses a 'volumes' file
-        volf="${host}_volumes"
-        if [ ! -e "$volf" ] ; then                      # ext4 mode without volumes file
-            opts+=('-4') ; volf= ; fsys='ext4'
-        fi
+                                                        # btrfs uses a 'volumes' file
+    matchpath -s volf -f -o -- "${host}_volumes" "${host}-"*_volumes
+    if [ $? != 0 ] ; then                               # ext4 mode without volumes file
+        [ -z "$fsys" ] && fsys='ext4'
+    fi
+    if [ "$fsys" = 'ext4' ] ; then                      # no 'volumes for ext4
+        [ -n "$volf" ] && warning $"Restoring a 'btrfs' system to 'ext4' partition"
+        opts+=('-4') ; volf=
     fi
 
     if [ "$name" != "$host" ] ; then                    # renaming ...
@@ -1919,13 +1927,14 @@ actionRestore() {
     if [ -z "$dbug" ] ; then
         # restore root, usr, home and boot (if present)
         if [ -n "$rasp" ] ; then
-            confirm -a -y -f '%-48s' "Install '$name' in 'raspberry' mode" || return
+            confirm -a -y -f '%-48s' $"Install '$name' in 'raspberry' mode" || return
             embed -z -v centauridisk "${opts[@]}" -M -R 512 -P$swap -- "${labl[1]}"
         else
-            confirm -a -y -f '%-48s' "Install '$name' in 'x86/pc' mode" || return
+            confirm -a -y -f '%-48s' $"Install '$name' in 'x86/pc' mode" || return
             embed -z -v centauridisk "${opts[@]}" -P$swap -- "${labl[1]}"
         fi
     fi
+    error -t || return
 
     # mount destination partition
     system -e -p -r -- partprobe ; sleep 1
@@ -1936,7 +1945,7 @@ actionRestore() {
         [ "$name" != "$host" ] && samba_check -i "$CEN_MOUNT_DIR"
 
         if [ -h "$CEN_MOUNT_DIR/boot/efi" ] || [ -d "$CEN_MOUNT_DIR/boot/efi" ] ; then
-            message "This system is configured to boot via EFI"
+            message $"This system is configured to boot via EFI"
         fi
     fi
 
@@ -1946,7 +1955,7 @@ actionRestore() {
         # all btrfs systems update-grub should already be diverted by cloning
 
         [ -d "$CEN_MOUNT_DIR/boot/grub" ] || break
-        message -a "Replacing 'grub.cfg' with 'grub.minimal'"
+        message -a $"Replacing 'grub.cfg' with 'grub.minimal'"
         # shellcheck disable=SC2034
         local gcfg stab="s/^set myname=.*/set myname=$name/"
         system -e -p -s gcfg -- sed -e "$stab" 'grub.minimal' || break
@@ -1954,7 +1963,7 @@ actionRestore() {
 
         [ -x "$CEN_MOUNT_DIR/usr/sbin/udate-grub.distrib" ] && break
         targ='/usr/sbin/update-grub'
-        message -a "Diverting '$targ' to noop"
+        message -a $"Diverting '$targ' to noop"
         system -e -p dpkg-divert --root="$CEN_MOUNT_DIR" --rename --add "$targ" || break
         targ="$CEN_MOUNT_DIR$targ"
         dryrun "<script $targ>" && break
@@ -1979,9 +1988,9 @@ actionRestore() {
             *)
                 # shellcheck disable=SC2086
                 matchpath -e -o -s tarf -- *_${item,}_*
-                message -a -p "Extra volume: %s  Tar file: %s" "$item" "${tarf:--}"
+                message -a -p $"Extra volume: %s  Tar file: %s" "$item" "${tarf:--}"
                 if [ ! -d "$CEN_MOUNT_DIR/Volumes" ] ; then
-                    error "Missing folder:" "$CEN_MOUNT_DIR/Volumes"
+                    error $"Missing folder:" "$CEN_MOUNT_DIR/Volumes"
                     break
                 fi
                 volu="$CEN_MOUNT_DIR/Volumes/$item"
@@ -1999,7 +2008,7 @@ actionRestore() {
         for file in *_export_*.tar* *_shared_*.tar* ; do
             [ -f "$file" ] || continue
             item="${file#*_}" ; item="${item%%_*}"
-            message -a -p "Extra folder: %s  Tar file: %s" "$item" "$file"
+            message -a -p $"Extra folder: %s  Tar file: %s" "$item" "$file"
             item="$CEN_MOUNT_DIR/$item"
             folder -m -- "$item" || break
             system -e -p tar -C "$item" -xaf "$file" || break
@@ -2009,7 +2018,7 @@ actionRestore() {
     # appl='' do nothing, appl=1 do query or params, appl=2 network only
     if [ "$appl" = 1 ] ; then
         # 3 args: do parameter-file or query update
-        cfg_apply "$CEN_MOUNT_DIR" "$name" "$para"
+        cfg_apply "$CEN_MOUNT_DIR" "$name" "${para:-+}"
     elif [ -n "$appl" ] ; then
         # 2 args: system was renamed, need wpa update
         cfg_apply "$CEN_MOUNT_DIR" "$name" -
@@ -2038,7 +2047,7 @@ actionSetup() {
 
     # Updated seed tar, must restart. Ignore this if called by setup
     if [ -z "$CEN_OPT_DISPATCH" ] && [ "$DAT_SEED" -nt '.timestamp' ] ; then
-        trace "The seed tar was updated, must restart after unpacking"
+        trace $"The seed tar was updated, must restart after unpacking"
         dryrun -s "unpack/restart" && quit -t -a
         run_installer 'install'
         # install replaced our sources, so we must restart now ...
@@ -2061,12 +2070,16 @@ actionSetup() {
 
     dryrun -s 'setup' && return                 # setup does not handle dryrun
 
-    trace -p "Calling '%s' in 'setup' script" "$CEN_OPT_DISPATCH"
+    if [ ! -h "/etc/network/interfaces" ] && netoption 'sysdnames' "$HOSTNAME" ; then
+        warning -p "Should not have option 'sysdnames' for '%s' host" "$HOSTNAME"
+    fi
+
+    trace -p $"Calling '%s' in 'setup' script" "$CEN_OPT_DISPATCH"
     # shellcheck disable=SC2034
     [ -n "${CEN_CMDARGS[CEN_CMDINDX]}" ] && DAT_NOT_LAST=1 || DAT_NOT_LAST=
     # shellcheck disable=SC2086
     isfunction -c -e --  "$CEN_OPT_DISPATCH" $verb "$@"
-    trace -p "Returned from '%s'" "$CEN_OPT_DISPATCH"
+    trace -p $"Returned from '%s'" "$CEN_OPT_DISPATCH"
 }
 
 # ------------------------------------------------------------------------------

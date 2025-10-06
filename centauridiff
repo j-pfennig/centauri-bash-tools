@@ -4,7 +4,7 @@ CEN_LEGAL="Dr. Jürgen Pfennig (c) 2021-2025; BSD License"
 CEN_TITLE=$"Handle differences between text files"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -i -r -s -y - '0.07:4' 2 2 || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -i -r -s -y - '0.08:6' 2 2 || exit 2
 
 # Data
 CEN_OPT_ACCEPT=             # see --accept
@@ -547,6 +547,7 @@ options() {
             optarg "$opts" - -m '--accept --revert'
             opts+="$CEN_OPT_EDIT$CEN_OPT_KOMPARE$CEN_OPTMERGE$CEN_OPT_PROMPT$CEN_OPT_SHELL"
             optarg "$opts" - -m '--edit --kompare --merge --prompt --shell --accept --revert'
+            CEN_OPT_INCLEXCL+=('' '*~')
             [ -n "$CEN_OPT_FIX" -o -n "$CEN_OPT_ROOT" ] && context -s
             CEN_HISTORY='-' ;;
 

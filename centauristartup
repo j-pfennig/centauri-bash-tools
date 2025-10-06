@@ -3,7 +3,7 @@
 CEN_LEGAL=$"Dr. Jürgen Pfennig (c) 2020-2025; BSD License"
 CEN_TITLE=$"Network mode and GUI selection menu"
 
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -t - '0.24:6' 1 || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -t - '0.25:6' 1 || exit 2
 
 # global data
 
@@ -240,6 +240,7 @@ show_dialog() {
 
 # show menu: <default> <timeout> <current> <result>
 show_menu() {
+    trace -a -c ' ' "$*"
     local opts=() entr=() temp coun=0 lins=7 dtag dflt="$1" curr="$3"
     ((lins += ${#DAT_RUN_MODES[@]}))
 
@@ -449,8 +450,9 @@ do_guikill() {
 
 # using /etc/X11/xinit/xinit.rc to run a script/tool: <user>|-
 do_launcher() {
-    local indx fdes
-    eval fdes=~$1 ; fdes+="/.$CEN_NAME"             # path of symlink/script
+    local indx fdes="${1:--}"
+    [ "$fdes" = '-' ] && fdes='local'
+    eval fdes=~$fdes ; fdes+="/.$CEN_NAME"          # path of symlink/script
 
     # delete symlink if arg is '-' or no command is configured
     if [ "${1:--}" != '-' ] ; then
@@ -484,7 +486,7 @@ do_launcher() {
         set -- "${acmd[@]}"
     fi
     create $topt -b -h - -- "$fdes" 755 "$user:" <<!EOF
-export XDG_CURRENT_DESKTOP=xinit
+export XDG_CURRENT_DESKTOP='xinit'
 exec ${@@Q}
 !EOF
 }
@@ -496,7 +498,7 @@ do_netcheck() {
         nettemp 'centauriswitch' && embed -b "$_nettemp"
         [ -z "$DAT_SWITCH_MODE" ] && DAT_SWITCH_MODE='unknown'
     fi
-    trace -a -c 'Network Mode' "$DAT_SWITCH_MODE"
+    trace -a -c 'Network Mode' "$DAT_SWITCH_MODE:$DAT_SWITCH_CONF"
     [ "$DAT_SWITCH_MODE" != 'disabled' ]        # return status
 }
 
@@ -532,7 +534,7 @@ do_netwait() {
 #   fgui:   0 -> switch vt if gui is active
 #           1 -> ask if gui should be terminated
 #   verb:   reboot shutdown switch ... vterm
-#   mode:   clock kiosk homeassistant ...
+#   mode:   clock kiosk homeassistant weewx ...
 # ------------------------------------------------------------------------------
 do_root() {
     trace -c ' ' -- "$*"
@@ -563,9 +565,6 @@ do_root() {
     if [ -n "$mode" ] ; then
         set -- "$mode" "${@:2}"
     else
-       # if runservice level 4 || runservice status display-manager ; then
-       #     systemctl isolate 'runlevel3'
-       # fi
         set -- 'desktop' "$@"
     fi
     message $"Run as root user"": $CEN_NAME $*"
@@ -644,14 +643,14 @@ actionDesktop() {
 
     # we do not use exec because we want to catch/display error messages
     embed -t -v -- centauridisplay -q "${opts[@]}"
-    timer -w 3
+    timer -w 6
 
     # start swap and timers, terminate plymouth
     local timl=() timw
     [ "${DAT_DISP_TIMERS:--}" != '-' ] && timl+=($DAT_DISP_TIMERS)
     [ "${DAT_APPL_TIMERS[indx]:--}" != '-' ] && timl+=(${DAT_APPL_TIMERS[indx]})
     system -w -p -- systemctl --no-block start 'centauriswap.service' "${timl[@]/*/&.timer}"
-    system -q -- plymouth quit
+    system -q -- plymouth --quit
     do_errlog -e
 }
 
@@ -725,7 +724,7 @@ actionInstall() {
                 create -t -- "$home/.hushlogin"
             fi
 
-            file="$CEN_TOOLS/Display/$user-home.tgz"
+            file="$CEN_TOOLS/Desktop/$user-home.tgz"
             [ -e "$file" ] && system -e -p -- tar -xaf "$file" -C "$home"
             symlink -n -- "$CEN_TOOLS/$CEN_NAME" "$home/$DAT_LOGINLINK"
             system -q chown -R "$user:" "$home" ; system -q chmod 775 "$home"
@@ -767,7 +766,7 @@ run_wmctrl() {
 # handle raspi dsi display rotation
 if [ -r '$CEN_PERSISTENT/xinit-rotate' ] ; then
     source '$CEN_PERSISTENT/xinit-rotate'
-    [ -n "\$ROTATE_ID" ] && xinput set-prop "\$ROTATE_ID" \
+    [ "\${ROTATE_ID:--}" != '-' ] && xinput set-prop "\$ROTATE_ID" \
         'Coordinate Transformation Matrix' -1 0 1   0 -1 1  0 0 1
 fi
 
@@ -775,6 +774,7 @@ fi
 if [ -x .centauristartup ] ; then
     if [ -x "\$CEN_WM" ] ; then
         [ "\$CEN_WM" -ef '/usr/bin/xfwm4' ] && CEN_WM="\$CEN_WM --sm-client-disable"
+        export XDG_CURRENT_DESKTOP='xinitrc'
         run_wmctrl ./.centauristartup
     else
         xmessage "Please install a x-window-manager like 'twm' or 'xfwm4'"
@@ -782,14 +782,13 @@ if [ -x .centauristartup ] ; then
 
 # start a desktop
 elif [ -x /usr/bin/startplasma-x11 ] ; then
-    #export XDG_CURRENT_DESKTOP="KDE"
     startplasma-x11
     pkill -g 0 plasma_session
 elif [ -x /usr/bin/startlxqt ] ; then
-    export XDG_CURRENT_DESKTOP="LXQt"
+    export XDG_CURRENT_DESKTOP='LXQt'
     startlxqt
 elif [ -x /usr/bin/startkde ] ; then
-    export XDG_CURRENT_DESKTOP="KDE"
+    export XDG_CURRENT_DESKTOP='KDE'
     startkde
 elif [ -x "\$CEN_WM" ] ; then
     run_wmctrl xterm -fullscreen -sb -rightbar -ls
@@ -845,8 +844,6 @@ actionLogfile() {
 # Enter maintenance mode
 # ------------------------------------------------------------------------------
 actionMaintenance() {
-# TODO do_errlog
-# TODO kill user processes
     do_guikill
     embed -v centauriswitch enter disabled
     system -e systemctl start centauri-public.target
@@ -900,8 +897,20 @@ actionMenu() {
     else
         invoke -e $"Invalid user, must use option --kiosk" ; rename
     fi
+
     if [ "$USER" = 'local' ] ; then
-        mgui='network' ; cgui='desktop'
+        mgui='-' ; cgui='desktop'
+        if [ "$DAT_SWITCH_MODE" = 'manual' ] ; then
+            for indx in interfaces.* ; do
+                case "${indx##*.}" in
+                simple|smart|static)
+                    [ "$mgui" = '-' ] && mgui= ;;
+                *)
+                    mgui='network'
+                esac
+            done
+        fi
+        [ "$mgui" = '-' ] && mgui='network'
     fi
     app_byname indx cgui "$user"
 
@@ -940,8 +949,13 @@ actionMenu() {
         # select gui mode
 
         while : ; do
-            [ -n "$DAT_TRAP" ] && break     # back to network dialog
+            [ -n "$DAT_TRAP" ] && break         # back to network dialog
             do_launcher -
+            do_netcheck -r                      # reload status
+            case "$DAT_SWITCH_MODE" in
+            rou*)   DAT_TOUT= ;;
+            swi*)   DAT_TOUT= ;;
+            esac
             show_display mgui "${cgui:-desktop}" "$cgui" "$DAT_TOUT" || break
             DAT_TOUT=
             [ "$cgui" = "$mgui" ] && sesn=0 || sesn=1
@@ -1090,9 +1104,10 @@ usage() {
        -o '-T --timeout <scnd>' $"Set menu timeout, use '0' to disable" \
 
     usageset \
-       -a 'list       [<name>]' $"List applicance configuration" \
+       -a 'list       [<appl>]' $"List applicance configurations" \
        -a 'menu'                $"Show network mode and gui selection menu; implied" \
        -a -                     $"if '$CEN_NAME' is started as '$DAT_LOGINLINK'"\
+       -a 'timer      [<appl>]' $"List systemd timers wanted by appliances" \
        -a - \
        -a '••• '$"Run in display mode"$" (needing root rights)"' •••' \
        -a -
@@ -1122,6 +1137,7 @@ usage() {
        -a 'vterm      [<tnum>]' $"activate virtual console" \
 
        usageset \
+       -p '<appl>'              $"name of an appliance configuration" \
        -p '<exit>'              $"0|off disallow  1|of allow  2|auto" \
        -p '<lcmd>'              $"one of:"' create delete show' \
        -p '<mode>'              $"one of:"' disabled static simple smart switch router repeater extender' \

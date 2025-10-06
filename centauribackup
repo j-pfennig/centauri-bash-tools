@@ -4,7 +4,7 @@ CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2013-2025; BSD License"
 CEN_TITLE="Runs a backup program based on a configuration file"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m bat -m con - '0.53:4' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m bat -m con - '0.54:6' || exit 2
 
 # Data
 DAT_DEF_CONF="$CEN_ROOT/default/$CEN_NAME"
@@ -37,7 +37,7 @@ DAT_TAR_OPTS=('--no-wildcards-match-slash' '--sparse' '--xattrs' '--acls'
 DAT_TAR_REMO=('--rsh-command=/usr/bin/ssh' '--rmt-command=/usr/sbin/rmt')
 
 # Data for extra options
-CEN_OPT_BASE='/'                # see --base
+CEN_OPT_BASE=                   # see --base
 CEN_OPT_PACK=                   # see --pack
 CEN_OPT_CONFIG=                 # see --config
 CEN_OPT_HOST="$HOSTNAME"        # see --host
@@ -322,7 +322,7 @@ do_checks() {
 
     case "$2" in
     .|./*) ;;              # good
-    /*)     if [ "$CEN_OPT_BASE" = '/' ] ; then
+    /*)     if [ "${CEN_OPT_BASE:-/}" = '/' ] ; then
                 warning "Absolute path names are deprecated: $2"
             else
                 fatal "Absolute path name used with --basedir: $2"
@@ -730,7 +730,7 @@ actionRun() {
         fi
 
         # set/restore the base dir
-        folder -f -c "$CEN_OPT_BASE"
+        folder -f -c "${CEN_OPT_BASE:-/}"
 
         # initially save options that are used by the 'default' statement
         if [ -z "$DAT_INITIAL" ] ; then
@@ -786,7 +786,7 @@ actionRun() {
             fi
 
             # handle snapshots
-            if [ "$CEN_OPT_BASE" != '/' ] ; then
+            if [ -n "$CEN_OPT_BASE" ] ; then
                 [ "$CEN_OPT_SNAP" != 0 ] && warning -i -d mark "Option --base disables --snapshot"
             elif [ "$CEN_OPT_SNAP" != 0 ] ; then
                 local relu rell reln
@@ -842,37 +842,39 @@ actionRun() {
 }
 
 # ------------------------------------------------------------------------------
-# Archive action: [<folder>] <tar-args>...
+# Archive action: <folder>|- <tar-args>...
 # ------------------------------------------------------------------------------
 actionArchive() {
-    local opts
+    local fldr gues
     DAT_SKIP_TAG=
     DAT_STORAGE="${CEN_OPT_STORAGE:-$PWD}"
     [ "$DAT_STORAGE" = '/' ] || DAT_STORAGE+='/'
 
+    [ -n "$CEN_OPT_BASE" ] && folder -f -c "$CEN_OPT_BASE"
     if [ "$1" = '-' ] ; then
-        shift ; opts=1
-        message TODO - arg
+        shift
+    else
+        folder -s fldr -- "$1" || return
+        case "$fldr" in
+        */*)    warning $"Using paths containing '/' is not recommended" ;;
+        *_*_*)  gues="${1#*_}" ; gues="${gues%_*}" ;;
+        *)      [ -z "${1//[[:alpha:]]/}" ] && gues="$1"
+        esac
+        shift ; set -- "$@" "$fldr"
     fi
 
     if [ -z "$CEN_OPT_TAG" ] ; then
-   #     local arg1="${1%/}"
-   #     if [ "${arg1/[.\/]/}" = "$arg1" ] && [ -d "$arg1" ] ; then
-   #         arg1="${arg1//[_ ]/-}"
-   #         CEN_OPT_TAG="${arg1,,}"
-   #     else
-            quit -e "Cannot guess tag, please use '--tag=<name>'"
-   #     fi
+        [ -z "$gues" ] && quit -e $"Cannot guess tag, please use '--tag=<name>'"
+        CEN_OPT_TAG="$gues"
     fi
-    [ $# = 1 -o -n "$opts" ] && set -- "${DAT_TAR_OPTS[@]}" "$@"
 
-    do_archive init 'archive'
-    folder -f -c "$CEN_OPT_BASE"
+    set --  "${DAT_TAR_OPTS[@]}" "$@"
+    do_archive 'init' 'archive'
 
     do_pack
-    do_archive file
-    do_archive opts "$@"
-    do_archive done
+    do_archive 'file'
+    do_archive 'opts' "$@"
+    do_archive 'done'
 }
 
 # ------------------------------------------------------------------------------
@@ -882,7 +884,7 @@ actionClone() {
     [ -n "$DAT_RUN_FLAG" ] && message -i ; DAT_RUN_FLAG=1
     DAT_STORAGE="${CEN_OPT_STORAGE:-$PWD}"
     [ "$DAT_STORAGE" = '/' ] || DAT_STORAGE+='/'
-    folder -f -c "$CEN_OPT_BASE"
+    folder -f -c "${CEN_OPT_BASE:-/}"
     DAT_TARGET="${CEN_OPT_TAG}"
     do_pack
     do_clone "$@"
@@ -923,13 +925,13 @@ options() {
     -A|--sna*)
         optarg 'snapshot'   CEN_OPT_SNAP   -o ;;            # off|on|auto
     -B|--bas*)
-        optarg 'base'       CEN_OPT_BASE   -d ;;            # folder
+        optarg 'base'       -              -d ;;            # folder
     -C|--con*)
-        optarg 'config'     CEN_OPT_CONFIG -t ;;            # any text
+        optarg 'config'     -              -t ;;            # any text
     -E|--dat*)
-        optarg 'date'       DAT_BAK_DFMT -t ;;              # any text
+        optarg 'date'       DAT_BAK_DFMT   -t ;;            # any text
     -H|--hos*)
-        optarg 'host'       CEN_OPT_HOST -t ;;              # any text
+        optarg 'host'       -              -t ;;            # any text
     -M|--met*)
         optarg 'method'     CEN_OPT_METH 'tar' ;;           # regular expression
     -O|--out*)
@@ -1033,9 +1035,12 @@ $CEN_USE_OPTIONS
        -U --user            run as non-root user, use ~/.$CEN_NAME config
 
 actions:
-       archive [-] <arg>... low-level: create archive for tag using arguments, '-'
-                            disables the use of archiver default arguments
-       clone   <mnt|part>   low-level: create image for tag from ntfs partition
+       archive <dir> <arg>...
+                            archive a single folder, <arg>... are passed to tar
+       archive - <arg>... <path>...
+                            archive <list>... items, <arg>... are passed to tar
+
+       clone   <mnt|part>   create image for tag from ntfs partition
 
        groups               show the group names
        targets              show the target names
@@ -1049,18 +1054,21 @@ arguments:
        <snap>               snapshots  0|off:none  1|on:force  2|auto:try
        <dir>                any folder
        <file>               any file
-       <patt>               pattern where the following tranformations apply:
+       <path>               any folder or file
+       <patt>               pattern where the following transformations apply:
                                %D := <date>   %H := <host>        %% := %
                                %T := <tag>    %X := <extension>   %Z := %H_%T_%D
        <meth>               must be "tar"
        <tool>               one of these packer tools: none bzip2 gzip lzop xz zstd
 
 examples:
-       $CEN_NAME disk                                  # backup a target
-       $CEN_NAME archive --output xxx.tgz xxx/         # backup a folder
-       $CEN_NAME archive --storage ../backups my_dir   # default backup name
+       $CEN_NAME archive --output xxx.tgz - x y z      # backup some items
+       $CEN_NAME archive --storage=.. --tag=test - --- --exclude=*~ abc*
+       $CEN_NAME archive --storage ../backups mydir    # default backup name
+       $CEN_NAME archive --output=mydir.tgz mydir --- --exclude=*~
 
-       $CEN_NAME -S disk -A1 disk                      # from snapshot(s)
+       $CEN_NAME disk                                  # backup a target
+       $CEN_NAME --storage disk -A1 disk               # from snapshot(s)
        $CEN_NAME -S . -A0 -B /mnt/xxx root usr home    # from mounted disk
                                                             # arbitrary data...
        $CEN_NAME -S . -H beta3 -T boot -B /mnt/xxx/boot archive .

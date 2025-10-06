@@ -11,7 +11,7 @@ CEN_TITLE=$"Tool to (un)install and run WeeWX"
 # ------------------------------------------------------------------------------
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -m con -o -s -t -y \
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -g -o -s -t -y \
                     'centauriweewx' '0.04:5' || exit 2
 
 # configurable data, see default file
@@ -20,7 +20,7 @@ DAT_BASE="/opt/$DAT_NICK"               # binaries go here
 DAT_NAME="${DAT_NICK,,}"                # internally used name
 DAT_SERV="$CEN_NAME.service"            # custom service name
 DAT_USER="$DAT_NAME"                    # system user name
-DAT_VENV="$DAT_BASE/venv"               # python virtualenv
+DAT_VENV="$DAT_BASE/weewx"              # python virtualenv
 DAT_ENAB="$DAT_VENV/service-enabled"    # custom, see autorun action
 DAT_EXEC="$DAT_VENV/bin/weewxd"         # weewx daemon
 DAT_HTML='/var/www/html'                # web server folder for export
@@ -31,7 +31,7 @@ DAT_BROWSER=('x-www-browser')
 DAT_EDITOR=('editor')
 
 # started as an appliance?
-[ "${BASH_ARGV0##*/}" = '.centauristartup' ] && set -- --quiet web
+[ "${BASH_ARGV0##*/}" = '.centauristartup' ] && set -- -v -v -g1 web
 
 # nothing configurable below ...
 
@@ -128,14 +128,12 @@ inst_packages() {
 # Create service unit file
 # ------------------------------------------------------------------------------
 service_unit() {
-    [ -e "$DAT_SVCC" ] && return
-    DAT_SVCC="$DAT_BASE/$DAT_SERV"
-    create -c -- "$DAT_SVCC" <<!EOF
+    create -t -c -- "$DAT_SVCC" <<!EOF
 # ${DAT_SVCC##*/} - Run $DAT_NICK
 [Unit]
 Description=$DAT_NICK Server
 After=networking.service
-Wants=networking.service
+Wants=networking.service lighttpd.service
 
 StartLimitBurst=10
 StartLimitIntervalSec=1000
@@ -156,7 +154,7 @@ RestartSec=30s
 ExecStart=$DAT_EXEC
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target networking.service
 !EOF
 }
 
@@ -192,7 +190,8 @@ venv_setup() {
         message -a $"Using python virtual environment:" "$DAT_VENV"
     fi
 
-    [ -e "$DAT_VENV/bin/activate" ] && source "$DAT_VENV/bin/activate" && return 0
+    sysfind -d                                      # MUST DROP CACHED PATHS!
+    embed -n -b -- "$DAT_VENV/bin/activate" && return 0
     error $"Failed to activate python environment:" "$DAT_VENV" ; return 1
 }
 
@@ -237,7 +236,7 @@ actionDeps() {
     fi
 
     message -i
-    inst_packages sudo python3 python3-venv || return 1
+    inst_packages sudo python3 python3-pip python3-venv || return 1
     message -i
 
     # set permissions
@@ -472,15 +471,15 @@ actionWeb() {
     case "$wurl" in
     http://*|https://*)
         ;;
-    -)  if [ -z "$CEN_PACKAGE" ] ; then             # centauri-bash-lib only ...
-            if nethost "$DAT_NAME" || nethost 'weewx' ; then
-                wurl="http://$_nethost_ip/$DAT_NAME"
+    -)  if [ -f "$DAT_ENAB" ] && check_enabled "$DAT_SERV" ; then
+            if echo 2>/dev/null >'/dev/tcp/localhost/80' ; then
+                wurl="http://localhost:8123"
             fi
-        elif echo 2>/dev/null >'/dev/tcp/localhost/80' ; then
-            wurl="http://localhost/$DAT_NAME"
+        elif [ -z "$CEN_PACKAGE" ] ; then           # centauri-bash-lib only ...
+            if nethost "$DAT_NAME" || nethost "$DAT_NICK" ; then
+                wurl="http://$_nethost_ip:80"
+            fi
         fi
-        ;;
-    http:/*|https:/*)
         ;;
     *)  wurl="http://$wurl/$DAT_NAME"
     esac

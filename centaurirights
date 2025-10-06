@@ -109,7 +109,7 @@ runSingle() {
     folder -r -p "$farg" || return
 
     # check for special folders
-    for i in / /bin /boot /data /dev /etc /home /lib /lib64 /media /mnt /opt /proc /root /run /sbin /srv /sys /tmp /usr /var ; do
+    for i in / /bin /boot /dev /etc /home /lib /lib64 /media /mnt /network /opt /proc /root /run /sbin /srv /sys /tmp /usr /var ; do
         if [ "$farg" -ef "$i" ] ; then
             error "This folder is protected: $farg"
             return

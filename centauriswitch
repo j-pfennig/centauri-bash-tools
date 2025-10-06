@@ -672,7 +672,7 @@ do_switch() {
     done
     do_suffixes "${conf%%.*}" "$suff" "${list[@]}"
 
-    # more switching us done here...
+    # more switching is done here...
     list=(switch "$serv")
     if [ "$CEN_ACTION" = 'server' ] ; then
         case "$CEN_NET_MODE" in
@@ -981,6 +981,10 @@ actionEnter() {
     do_no_output                                    # --output not allowed
     local mode="${1%%:*}" conf="${1#*:}" rrou rsec rfil oset
     [ "$conf" = "$1" ] && conf="$2"
+    case "$mode" in                                 # known composit modes...
+    ext*)   mode='switch' ; conf='extender' ;;
+    rep*)   mode='router' ; conf='repeater'
+    esac
     nettemp -s                                      # read config
     case "$mode" in
     dis*)   mode='disabled' ; rfil=1 ; oset='-r' ;;
@@ -1110,10 +1114,12 @@ actionStart() {
 
     # what mode?
     case "$DAT_SWITCH_MODE" in
-    dis*)       run_setup='-r'              # no interface callbacks (no dhcp)
+    dis*|man*)  run_setup='-r'              # no interface callbacks (no dhcp)
                 run_secrets='-r'            # do not runc secrets
                 is_disabled=1
-                mesg="No iface config switching in 'disable' mode"
+                [ "${DAT_SWITCH_MODE::3}" = 'dis' ] &&
+                    mesg="No iface config switching in 'disable' mode" ||
+                    mesg="Doing nothing in 'manual' mode"
                 [ -z "$*" ] && mesg+=" (kernel parameter)"
                 ;;
 
@@ -1277,7 +1283,7 @@ actionUpDown() {
     if [ "$2" = 'NetworkManager' ] ; then
         if [ "${DEVICE_IFACE::6}" = 'ttyUSB' ] ||
            [ "${1::3}" = 'tun' -a -z "$VPN_IP_IFACE" ] ; then
-            message -a "Ignore NetworkManager extra event" ; return
+            message -a "Interface: Ignore NetworkManager extra event" ; return
         fi
 
     # report dhcp failure and ignore ...
@@ -1289,6 +1295,11 @@ actionUpDown() {
     fi
 
     nettemp -s                                  # config saved by centauriroute
+
+    if [ "${DAT_SWITCH_MODE::3}" = 'man' ] ; then
+        message -p $"Interface: %-6s Ignored: '%s' in 'manual' mode" "$1" "$2"
+        return
+    fi
 
     # run only for configured interfaces
     local item ifce="$1"

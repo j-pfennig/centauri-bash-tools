@@ -3,12 +3,11 @@
 CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2016-2024; BSD License"
 CEN_TITLE="Backup Btrfs Volumes to Archive Disk using 'centauricopy'"
 
-# include boot folder
 # excludes (sddm/cache)
 # TODO mount status in $CEN_ROOT/transient
 # TODO /etc/default/centaurimirror
 
-PATH=+":${0%/*}" . _centauri_bash_lib -a -d -i -m bat -s -y - '0.27:4' || exit 2
+PATH=+":${0%/*}" . _centauri_bash_lib -a -d -i -m bat -s -y - '0.28:6' || exit 2
 
 # Data
 CEN_OPT_ALL=                    # see --all
@@ -36,7 +35,7 @@ initialize() {
     local labl mdev mdir
 
     _mount() {
-        local mdev="$1" ; [ "${mdev::1}" = "/" ] || mdev="/dev/$mdev"
+        local mdev="$1" ; [ "${mdev::1}" = '/' ] || mdev="/dev/$mdev"
         [ -b "$mdev" ] || fatal "Not a block device: $mdev"
         if findmount "$mdev" ; then
             [ -n "$CEN_OPT_MOUNT" -a "$CEN_OPT_MOUNT" != "$CEN_MOUNT_DIR" ] &&
@@ -254,6 +253,17 @@ runbtrfs() {
     local -n vhis="$1" ; vhis=() ; shift
     local vols="$1" ; shift
     local item labl prty=() acpy=() baki bakx vnam root=1
+
+    # add mounted boot partition (which is not in Volumes)
+    if [ -z "$vols" ] && matchpath -s item -d -o -p -- \
+        "$CEN_OPT_BASE/mnt/boot/"* "$CEN_OPT_BASE/boot/firmware/"* ; then
+        item="${item%/*}"
+        if filter -i "${item##*/}" ; then
+            prty=("$item")
+            message -a "backup:" "$item"
+        fi
+    fi
+
     for item in "$@" ; do
         [ -n "${item##*Volumes}" ] || continue              # skip base folder
         prettypath -p -s item "$item"
@@ -283,8 +293,10 @@ runbtrfs() {
             bak?|[bB]ackup)
                 [ -n "$bakx" ] && acpy[0]="$bakx"
                 vnam='Backup' ; acpy[1]="$vnam" ;;
+            firmware)                               # raspberry PI
+                vnam='Firmware' ; acpy[1]="$vnam" ;;
             Root)
-                root=0 ;;                       # allow system rename
+                root=0 ;;                           # allow system rename
         esac
         vhis+=("${acpy[1]}")
         volcopy "$vnam" "${acpy[@]}"
@@ -299,7 +311,7 @@ runplain() {
     local -n vhis="$1" ; vhis=() ; shift
     local vols="$1" ; shift
     local rslt item orig excl
-    local locs=(Backup Boot Export Home Shared Root VBox)
+    local locs=(Backup Boot Export Firmware Home Shared Root VBox)
     # get special locacations
     shortpath -n dash -a rslt 'backup' 'vbox'
 
@@ -307,6 +319,7 @@ runplain() {
         case "$item" in
             Backup)     orig="${rslt[0]}" ;;
             Boot)       orig='/mnt/boot' ;;
+            Firmware)   orig='/boot/firmware' ;;
             Root)       orig='/' ;;
             Home)       orig='/home' ;;
             Export)     orig='/export' ;;
@@ -329,6 +342,7 @@ runplain() {
         case "$item" in
             Backup)     orig="${rslt[0]}" ;;
             Boot)       orig='/mnt/boot' ; excl=(-x '/*swap*') ;;
+            Firmware)   orig='/boot/firmware' ; excl=(-x '/*swap*') ;;
             Root)       orig='/'
                         excl=(-x '/home/*' -x '/export/*' -x '/[bB]ackup/*' \
                               -x '/archive/*' -x '/shared/*') ;;
@@ -416,6 +430,7 @@ volcopy() {
     fi
 
     local oarg opts=('--local=on' '--one' '--force' '--option=delete-before' '--option=preallocate' "$vopt")
+    [ "${dest##*/}" = 'Boot' -o  "${dest##*/}" = 'Firmware' ] && opts+=('--sloppy')
     [ -n "$CEN_OPT_DRYRUN" -a -n "$CEN_OPT_SILENT" ] && opts+=('--silent')
     for oarg in "${CEN_OPT_OPTION[@]}" ; do
         opts+=("--option=$oarg")
@@ -462,9 +477,11 @@ actionCopy() {
 
     # get local volumes
     if [ -z "$CEN_OPT_ALL" ] ; then
-        optarg "exclude" - -x "Backup"
-        optarg "exclude" - -x "Root"
-        optarg "exclude" - -x "Home"
+        optarg 'exclude' - -x 'Backup'
+        optarg 'exclude' - -x 'Boot'
+        optarg 'exclude' - -x 'Firmware'
+        optarg 'exclude' - -x 'Root'
+        optarg 'exclude' - -x 'Home'
     fi
     if [ -n "$CEN_OPT_SOURCE" ] ; then
         local spat="${CEN_OPT_SOURCE%/Volumes}"

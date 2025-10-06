@@ -7,7 +7,7 @@ CEN_TITLE="Tool to manage EFI boot and to create systemd-boot menu and UKI"
 PATH+=":${0%/*}" . _centauri_bash_lib -a -d -f -s -y - '0.32:4' || exit 2
 
 CEN_OPT_BASE=           # see --base, EFI partition mount point
-CEN_OPT_EXTERN=         # see --external, external disk
+CEN_OPT_EXTERNAL=       # see --external, external disk
 CEN_OPT_IFNAMES=        # see --ifnames
 CEN_OPT_IMAGE=          # see --image, kernel efi image, relative to DAT_EFIDIR
 CEN_OPT_NICKNAME=       # see --nickname, suffix for image folder and loader entries
@@ -582,30 +582,38 @@ do_repo() {
 do_shim() {
     do_file "$DAT_DIST_SHIM" shim-signed || return 1
 
-    if [ -z "$CEN_OPT_EXTERN" ] ; then              # auto detect
+    # some bios will cause trouble to boot external drives via systemd boot
+    # fall back to grub, try to auto detect this case ...
+
+    if [ -z "$CEN_OPT_EXTERNAL" ] ; then            # auto detect
         findmount - "$DAT_MOUNT" || CEN_MOUNT_DEV=
         case "$CEN_MOUNT_DEV" in
         '')     warning "Cannot auto-detect disk type, using '--external=off'"
-                CEN_OPT_EXTERN=0
+                CEN_OPT_EXTERNAL=
                 ;;
         /dev/sd*|/dev/mmc*)
-                CEN_OPT_EXTERN=1
-                message -a "Found external disk, using '--external=on'"
+                if [ -d "$DAT_EFI_SYSDDIR" ] ; then
+                    CEN_OPT_EXTERNAL=0
+                    message -a "Found systemd-boot disk, using '--external=off'"
+                else
+                    CEN_OPT_EXTERNAL=1
+                    message -a "Found external disk, using '--external=on'"
+                fi
                 ;;
-        *)      CEN_OPT_EXTERN=0
+        *)      CEN_OPT_EXTERNAL=0
                 message -a "Found internal disk, using '--external=off'"
         esac
     fi
 
     system -c iconv || return 1                     # used for CSV entries
 
-    if [ "$CEN_OPT_EXTERN" = 1 ] ; then
+    if [ "$CEN_OPT_EXTERNAL" = 1 ] ; then
         if [ "$1" = "$DAT_EFI_DISTDIR" -o "$1" = "$DAT_EFI_SYSDDIR" ] ; then
             [ -d "$1" ] || return 0
             confirm -a -f -y "Remove '%s' boot configuration" "$1" || return 0
             remove -d -- "$1" ; return 0
         elif [ "$1" = "$DAT_EFI_BOOTDIR" ] ; then
-            trace -a -c "External disk" "$PWD/$1"
+            trace -a -c "External grub-only disk:" "$1"
             do_file "$DAT_DIST_GRUB" grub-efi-amd64-signed || return 1
             remove -q -- "$1"/* ; folder -m -f -- "$1"
             copy -s -- "$DAT_DIST_GRUB" "$1/grub$DAT_ARCH_EFI"
@@ -1336,7 +1344,7 @@ owner key that is built into shim).
     > cp -a /usr/lib/systemd/boot/efi/systemd-bootx64.efi \\
             /mnt/boot/EFI/systemd/systemd-bootx64.efi
 
-# ... or /admin/centauriefilinux which also manages the
+# ... or /centauritools/centauriefilinux which also manages the
 # configuration in '/mnt/boot/loader' and the kernel/initrd image.
 !EOF
 }
@@ -1466,7 +1474,7 @@ options() {
             ;;
 
     -B|--bas|--base)    optarg 'base'        -   -d  ;;     # folder
-    -E|--ext*)          optarg 'extern'      -   -o  ;;     # ternary
+    -E|--ext*)          optarg 'external'    -   -o  ;;     # ternary
     -F|--ifn*)          optarg 'ifnames'     -   -o  ;;     # ternary
     -I|--img|--ima*)    optarg 'image'       -   -t  ;;     # text
     -N|--nic*)          optarg 'nickname'    -   -t  ;;     # text

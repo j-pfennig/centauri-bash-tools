@@ -23,17 +23,20 @@ DAT_USER="$DAT_NAME"                    # system user name
 DAT_VENV="$DAT_BASE/venv"               # python virtualenv
 DAT_ENAB="$DAT_VENV/service-enabled"    # custom, see autorun action
 DAT_EXEC="$DAT_VENV/bin/hass"           # weewx daemon
+DAT_PORT=8123
 
 # map quirks, HA version to minimal python version
 DAT_VERSIONS=('2024.3.3' '3.11:0'       # debian bookworm last 3.11 version
               '2025.1.4' '3.12:1'       # known working 3.12 version
-              '2025.5.3' '3.13:2'       # debian trixie
+#             '2025.5.3' '3.13:2'       # debian trixie
+              '2025.8.2' '3.13:3'       # debian trixie
              )
 
 # see https://wheels.home-assistant.io/musllinux-index/... for wheel versions
 DAT_QUIRKS=('|certbot'                  # 0 post-install
             '|certbot'                  # 1
             ''                          # 2
+            'ciso8601 lru-dict'         # 3 pre-install
            )
 
 # started as an appliance?
@@ -119,14 +122,14 @@ inst_extra_pre() {
 
     [ -z "$1" ] && return 0
     if (($1 & 2)) ; then
-        trace -a $"Installation of extra packages disabled" ; return 0
+        trace -a -c ' ' $"Installation of extra packages disabled" ; return 0
     fi
 
     local item="${DAT_QUIRKS[DAT_QUIRK]}" ; item="${item%%|*}"
     if [ -z "${item// /}" ] ; then
-        trace -a $"No extra packages to install" ; return 0
+        trace -a -c ' ' $"No extra packages to install" ; return 0
     fi
-    system -e $slnt -- pip3 install $item       # return status
+    sysrun -e -g 0 $slnt -- pip3 install $item      # return status
 }
 
 inst_extra_post() {
@@ -135,10 +138,11 @@ inst_extra_post() {
     (($1 & 2)) && return 0
 
     local item="${DAT_QUIRKS[DAT_QUIRK]}" ; item="${item##*|}"
+    [ "$item" = "${DAT_QUIRKS[DAT_QUIRK]}" ] && item=
     if [ -z "${item// /}" ] ; then
-        trace -a $"No extra packages to install" ; return 0
+        trace -a -c ' ' $"No extra packages to install" ; return 0
     fi
-    system -e $slnt -- pip3 install $item       # return status
+    system -e -g 0 $slnt -- pip3 install $item      # return status
 }
 
 # ------------------------------------------------------------------------------
@@ -157,7 +161,7 @@ inst_packages() {
     # fall back to native apt
     local slnt ; [ -n "$CEN_OPT_SILENT" ] && slnt='-p'
     [ -n "$oupd" ] && system -t -e $slnt -- apt update
-    system -t -e $slnt -- apt --yes install "$@"
+    system -t -g 0 -e $slnt -- apt --yes install "$@"
 }
 
 # ------------------------------------------------------------------------------
@@ -278,14 +282,15 @@ venv_setup() {
         done
 
         if vers_quirk ; then
-            system -p -- python3 -m venv "$DAT_VENV" || return 1
+            system -e -g 0 -p -- python3 -m venv "$DAT_VENV" || return 1
         else
-            system -p -- "python$DAT_PYVER" -m venv "$DAT_VENV" || return 1
+            system -e -g 0 -p -- "python$DAT_PYVER" -m venv "$DAT_VENV" || return 1
         fi
         message -a $"Using python virtual environment:" "$DAT_VENV"
     fi
 
-    [ -e "$DAT_VENV/bin/activate" ] && source "$DAT_VENV/bin/activate" && return 0
+    sysfind -d                                      # MUST DROP CACHED PATHS!
+    embed -n -b -- "$DAT_VENV/bin/activate" && return 0
     error $"Failed to activate python environment:" "$DAT_VENV" ; return 1
 }
 
@@ -479,7 +484,7 @@ actionSetup() {
     folder -c -f "$DAT_BASE"
     vers_quirk
 
-    local slnt cpip="$1" ; [ -n "$CEN_OPT_SILENT" ] && slnt='-q'
+    local slnt cpip ; [ -n "$CEN_OPT_SILENT" ] && slnt='-q'
     local what="$DAT_NAME"
     if [ "$1" = 'install' ] ; then
         venv_setup -c || return
@@ -501,10 +506,10 @@ actionSetup() {
         confirm -y -f $"Continue to upgrade %s" "$DAT_NICK" || return
         [ "${CEN_OPT_VERSION:--}" = '-' ] || what+="==$CEN_OPT_VERSION"
         [ -n "$slnt" ] && progress -a -l -- $"Upgrading..."
-        cpip='upgrade'
+        cpip='--upgrade'
      fi
      inst_extra_pre "${CEN_OPT_QUIRK:-0}" || return
-     system -e -- pip3 $slnt install "--$cpip" "$what" || return
+     system -e -g 0 -- pip3 $slnt install $cpip "$what" || return
      inst_extra_post "${CEN_OPT_QUIRK:-0}" || return
      [ -n "$slnt" ] && error -t && message -a -- $"Done."
 }
@@ -627,31 +632,26 @@ actionWeb() {
     local wurl="${1:--}" mode
 
     case "$wurl" in
-    http://*:[0-9]*)
+    http://*:[0-9]*|https://*:[0-9]*)
         ;;
-    https://*:[0-9]*)
-        ;;
-    http://*)
-        wurl+=':8123'
-        ;;
-    https://*)
-        wurl+=':8123'
+    http://*|https://*)
+        wurl+=":$DAT_PORT"
         ;;
     *:[0-9]*)
         wurl="http://$wurl"
         ;;
     -)  if [ -f "$DAT_ENAB" ] && check_enabled "$DAT_SERV" ; then
-            if ! echo 2>/dev/null >'/dev/tcp/localhost/8123' ; then
+            if ! echo 2>/dev/null >"/dev/tcp/localhost/$DAT_PORT" ; then
                 quit -e $"Cannot connect to '%s'" "$DAT_NICK"
             fi
-            wurl="http://localhost:8123"
+            wurl="http://localhost:$DAT_PORT"
         elif [ -z "$CEN_PACKAGE" ] ; then           # centauri-bash-lib only ...
             if nethost "$DAT_NAME" || nethost 'hass' ; then
-                wurl="http://$_nethost_ip:8123"
+                wurl="http://$_nethost_ip:$DAT_PORT"
             fi
         fi
         ;;
-    *)  wurl="http://$wurl:8123"
+    *)  wurl="http://$wurl:$DAT_PORT"
     esac
 
     if [ "$wurl" = '-' ] ; then
@@ -750,7 +750,7 @@ usage() {
         -p '<bits>'               $"1 - https://github.com/pascallj/python3.x-backport'" \
         -p ''                     $"2 - do not install extra packages" \
         -p '<user>'               $"linux user name" \
-        -p '<url>'                $"something like 'http://your-host:8123'" \
+        -p '<url>'                $"something like 'http://your-host:$DAT_PORT'" \
         -p '<vers>'               $"$DAT_NICK version to install" \
 
     usageset \

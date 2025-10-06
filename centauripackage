@@ -135,7 +135,8 @@ process_apt() {
 
     ___aptgui() {
         if [ -z "$CEN_OPT_SILENT" ] || [ "$CEN_VERB" -gt 1 ] ; then
-            system -e -p -z -- "$@" ; return
+            system -- "$@" && return 0
+            error -p $"The 'apt' command failed (status %s)" "$?"
         fi
         [ -z "$COLUMNS" ] && system -q -s COLUMNS -- tput cols
         local snam="${CEN_EMBED:-$CEN_NAME}" cols="${COLUMNS:-100}"
@@ -143,7 +144,7 @@ process_apt() {
 
         ___aptgui_orig() {
             DEBIAN_FRONTEND=noninteractive LC_MESSAGES=C DISPLAY= COLUMNS=$cols NO_COLOR=yes \
-            system -e "$@" --yes -o Dpkg::Options::='--force-confold' 2>&1 </dev/null ; echo STAT=$?
+            system "$@" --yes -o Dpkg::Options::='--force-confold' 2>&1 </dev/null ; echo STAT=$?
         }
 
         ___aptgui_dest() {
@@ -193,11 +194,11 @@ process_apt() {
                 *)  ___aptmsg "$poll" "$last" ; last=
                 esac
             done
-            [ "$stat" = 0 ] || error -p $"The 'apt' command failed (status %s)" "$stat"
             return "$stat"
         }
 
-        syspipe -b ___aptgui_orig -d ___aptgui_dest -- "$@"
+        syspipe -q -b ___aptgui_orig -d ___aptgui_dest -- "$@" && return 0
+        error -p $"The 'apt' command failed (status %s)" "$?"
     }
 
     ___aptyes() {

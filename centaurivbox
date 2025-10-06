@@ -4,7 +4,7 @@ CEN_LEGAL="Copyright Dr. J. Pfennig (c) 2007-2025; BSD License"
 CEN_TITLE="Run VirtualBox commands using the 'vbox' proxy user"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -g -y - '0.46:5' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -g -y - '0.47:5' || exit 2
 
 # Data
 
@@ -463,6 +463,19 @@ actionMount() {
 }
 
 # ------------------------------------------------------------------------------
+# create a rawdisk: [<name>] [<device>]
+# ------------------------------------------------------------------------------
+actionRawdisk() {
+    execute -v || return
+
+    [ "${1::1}" != '/' ] && folder -c -f -- "$DAT_DRIVES"
+    outfile -a -l -r -x 'vmdk' -- "$1" || return
+
+    system -e VBoxManage createmedium --filename="$CEN_OUTFILE" --format VMDK \
+                         --variant RawDisk --property RawDrive="$2"
+}
+
+# ------------------------------------------------------------------------------
 # stop/stop a VM: [<name>]
 # ------------------------------------------------------------------------------
 actionStart() {
@@ -682,41 +695,43 @@ actions() {
     case "$CEN_ACTION" in
 
     att*)
-        invoke    'attach' -           2 3 ;;
+        invoke    'attach'  -           2 3 ;;
     bat|batc|batch)
-        invoke    'batch'  actionStart 0 1 ;;
+        invoke    'batch'   actionStart 0 1 ;;
     cmd)
-        invoke -c -        -               ;;
+        invoke -c -         -               ;;
     com*)
-        invoke    'compact' -            1 ;;
+        invoke    'compact' -             1 ;;
     cre*)
-        invoke    'create' actionDrive   2 ;;
+        invoke    'create'  actionDrive   2 ;;
     del*)
-        invoke    'delete' actionDrive   1 ;;
+        invoke    'delete'  actionDrive   1 ;;
     exp*)
-        invoke    'export' -           0 2 ;;
+        invoke    'export'  -           0 2 ;;
     gui)
-        invoke    -        -           0   ;;
+        invoke    -         -           0   ;;
     hel|help)
-        invoke -c 'help'   -           0 1 ;;
+        invoke -c 'help'    -           0 1 ;;
     ini|init)
-        invoke    'init'   -           0 1 ;;
+        invoke    'init'    -           0 1 ;;
     low*)
-        invoke -s 'lowmem' -           0   ;;
+        invoke -s 'lowmem'  -           0   ;;
     mou*)
-        invoke    'mount'  -               ;;
+        invoke    'mount'   -               ;;
     res*)
-        invoke   'restore' actionWait  0 1 ;;
+        invoke    'restore' actionWait  0 1 ;;
+    raw*)
+        invoke    'rawdisk' -             2 ;;
     sta|star|start)
-        invoke    'start'  -           0 1 ;;
+        invoke    'start'   -           0 1 ;;
     sto*|shu*)
-        invoke    'stop'   actionStart 0 1 ;;
+        invoke    'stop'    actionStart 0 1 ;;
     unm*|umo*)
-        invoke    'umount' -           0 2 ;;
+        invoke    'umount'  -           0 2 ;;
     wai|wait)
-        invoke    'wait'   -           0   ;;
+        invoke    'wait'    -           0   ;;
     ????*)
-        invoke -c '(mgr)'  actionMgr   - - "$@" ;;
+        invoke -c '(mgr)'   actionMgr   - - "$@" ;;
 
     esac
 }
@@ -757,6 +772,8 @@ actions:
        lowmem               flush low memory cache
        mount   [<name>|<path>|<uuid> [<mdir>|- [RW] [<part>...]]]
                             list or mount vdi images/snapshots
+       rawdisk <disk> <device>
+                            create a raw disk
        restore [<snap>|-]]  wait and restore to (current) snapshot
        start   [<name>]     start a virtual machine
        stop    [<name>]     stop a virtual machine via ACPI powerbutton

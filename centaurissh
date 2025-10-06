@@ -124,32 +124,37 @@ do_scparg() {
     return 0
 }
 
+# ------------------------------------------------------------------------------
 # open a tunnel       : open <local-port> <host> [<host-port>]
 # wait to become ready: wait
 # close the tunnel    : close
-do_tunnel_prtl=
-do_tunnel_host=
-do_tunnel_prth=
+# ------------------------------------------------------------------------------
+do_tunnel_prtl=         # local port
+do_tunnel_host=         # host
+do_tunnel_prth=         # remote port
+do_tunnel_spid=         # ssh pid
 do_tunnel() {
-    if [ "$1" = "open" ] ; then
+    if [ "$1" = 'open' ] ; then
         do_private
-        do_tunnel_prtl="$2"
-        do_tunnel_host="${3:-localhost}"
-        do_tunnel_prth="${4:-$2}"
-        system -r -f -p ssh $CEN_OPT_HOST \
-            -L "$do_tunnel_prtl:$do_tunnel_host:$do_tunnel_prth" -N &
+        do_tunnel_prtl="$2"                         # local port
+        do_tunnel_host="${3:-localhost}"            # host
+        do_tunnel_prth="${4:-$2}"                   # remote port
+        system -r -e -x -- ssh $CEN_OPT_HOST -N \
+            -L "$do_tunnel_prtl:$do_tunnel_host:$do_tunnel_prth" & do_tunnel_spid=$!
         message -i "Tunnel to '$CEN_OPT_HOST' opened (remote=$do_tunnel_host:$do_tunnel_prth)"
 
-    elif [ "$1" = "close" ] ; then
-        system -r -e -p pkill -f \
-               "ssh $CEN_OPT_HOST -L $do_tunnel_prtl:$do_tunnel_host:$do_tunnel_prth -N" &&
-            message -i "Tunnel to '$CEN_OPT_HOST' closed (port=$do_tunnel_prth)"
+    elif [ "$1" = 'close' ] ; then
+        [ -n "$do_tunnel_spid" ] || return 1
+        kill -n 1 "$do_tunnel_spid" 2>/dev/null || return  1
+        do_tunnel_spid=
+        message -i "Tunnel to '$CEN_OPT_HOST' closed (port=$do_tunnel_prth)"
 
     else
         local indx
         for indx in 1 x 2 x 3 x 4 x 5 x 6 x 7 x 8 x 9 x x x x x x 0 ; do
-            sleep 0.5
-            system -r nc -z localhost $do_tunnel_prtl && break
+            timer -w 0.5
+            kill -0 "$do_tunnel_spid" &>/dev/null || quit -e $"Tunnel ssh process died"
+            echo 2>/dev/null >"/dev/tcp/127.0.0.1/$do_tunnel_prtl" && break
             [ "$indx" = 2 ] && message -i "Waiting for tunnel to become ready..."
         done
         [ "$indx" = 0 ] || return 0
@@ -248,7 +253,7 @@ actionCopy() {
         vref="$user@${host:-localhost}:${3:-.}"
     }
 
-    system -c -e scp getent nc                  # check requirements
+    system -c -e scp getent                     # check requirements
     do_private
 
     local pssh=22                               # host port for ssh
@@ -319,7 +324,7 @@ actionAuth() {
 # rdp tunnel for remote desktop: [<user>@<host>]
 # ------------------------------------------------------------------------------
 actionDesk() {
-    system -c -f krdc nc                        # check requirements
+    system -c -f krdc                           # check requirements
 
     local prot port prdp=3389                   # rdp port to tunnel
     local host="${1##*@}"
@@ -354,13 +359,13 @@ actionDesk() {
 # dolphin with tunneled sftp: [<user>@<host>]
 # ------------------------------------------------------------------------------
 actionFiles() {
-    system -c -e dolphin nc                     # check requirements
+    system -c -e dolphin                        # check requirements
 
     embed -m _centauri_bash_win -n              # no init here
     windows -e -i 1 -m || return                # force window or fail
 
-    local pssh="22"                             # host port for ssh
-    local ptun="2201"                           # port to tunnel
+    local pssh=22                               # host port for ssh
+    local ptun=2201                             # port to tunnel
     local host="${1##*@}"
     local user="${1%%@*}"
     [ "$user" = "$1" ] && user=
@@ -377,10 +382,8 @@ actionFiles() {
 
     do_tunnel open "$ptun" "$host" "$pssh"
 
-    # this is due to a bug in kio-sftp:
-    # system -p ssh-keygen -f "$HOME/.ssh/known_hosts" -R [localhost]:2201
-
-    do_tunnel wait && windows -t "$user@$host [$CEN_OPT_HOST]" -w dolphin "sftp://$user@localhost:$ptun"
+    do_tunnel wait && windows -t "$user@$host [$CEN_OPT_HOST]" \
+                              -w dolphin "sftp://$user@127.0.0.1:$ptun"
     do_tunnel close
 }
 

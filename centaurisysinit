@@ -4,7 +4,7 @@ CEN_LEGAL="Dr. Jürgen Pfennig (c) 2021-2025; "$"BSD License"
 CEN_TITLE=$"Centauri initialization and launcher for appliances"
 
 # Import the bash library, set name and version
-PATH+=":${0%/*}" . _centauri_bash_lib -a -d -t -v -y - '0.14:6' || exit 2
+PATH+=":${0%/*}" . _centauri_bash_lib -a -d -t -v -y 'centaurisysinit' '0.15:6' || exit 2
 
 CEN_SVC_WANTED_BY='sysinit.target'
 
@@ -19,10 +19,7 @@ DAT_ISSUE_DIR="$CEN_PERSISTENT/issue.d"
 
 # invoke 'issue' action if called via .centauriautologin symlink (see centaurisession)
 DAT_AUTOLOGIN='.centauriautologin'
-if [ "$CEN_NAME" = "$DAT_AUTOLOGIN" ] ; then
-    CEN_NAME='centaurisysinit'
-    set -- issue execute
-fi
+[ "${BASH_ARGV0##*/}" = "$DAT_AUTOLOGIN" ] && set -- issue execute
 
 DAT_BOOT_YESN='-y'      # for confirm boot
 
@@ -41,11 +38,6 @@ DAT_APPL_AUTO=          # centauriautologin account
 
 # homeassistant user
 DAT_APPL_HASS='homeassistant'
-
-## dummy functions to skip 'appliance' config lines
-#appliance() { : ; }                 # TODO: legacy, remove
-#apptimers() { : ; }
-#appusers()  { : ; }
 
 # get home folder: <name>
 get_home() {
@@ -195,7 +187,7 @@ run_appliances() {
     local wrap="${CEN_PATHS[2]}/X11/Xwrapper.config"
     [ -f "$wrap.default" ] && move -q -x -- "$wrap.default" "$wrap"
 
-    local sarg wrds word levl netw auto
+    local sarg wrds word levl netw auto appm
     if [ $# = 0 ] ; then
         readline -e -a wrds -i '/proc/cmdline'  # get the boot parametes
     else
@@ -204,23 +196,24 @@ run_appliances() {
                                                 # are we in runlevel 2/3 ?
     listsearch -g -m word -i wrds -- 'systemd.unit=runlevel[23].target' || return
     word="${word#*=}" ; levl="${word%.*}"
-    trace -a -c "Runlevel" -- "$levl"
+    trace -a -c 'Runlevel' -- "$levl"
 
     listsearch -g -m word -i wrds -- 'centauriswitch=*'
     netw="${word#*=}"
     trace -a -c 'centauriswitch' -- "$netw"
 
     listsearch -g -m word -i wrds -- 'centaurilogin=*'
-    auto="${word#*=}"
+    auto="${word#*=}" ; appm="$auto"
     trace -a -c 'centaurilogin' -- "$auto"
 
-    [ -z "$auto" ] && return    # no display appliance to run
-
     case "$netw" in
-        disab*) netw= ;;
-        manual) netw= ;;
+        '')         appm= ;;                        # missing 'centauriswitch=...'
+        *:server)   ;;                              # not a network appliance
+        *:*)        appm="${netw#*:}" ;;            # network appliace
     esac
-    message -a -c $"Appliance mode" "${netw:-$auto}"
+    message -a -c $"Appliance mode" "${appm:-<none>}"
+    [ -z "$appm" ] && return
+    run_apptimers "$appm"
 
     if [ -n "$netw" -a "$levl" = 'runlevel2' ] ; then
         # networking is not default in runlevel2
@@ -246,6 +239,27 @@ run_appliances() {
         message -a -c $"Autologin user" $"Not enabled, try 'centauristartup install $auto'"
         system -q -- plymouth quit
     fi
+}
+
+# ------------------------------------------------------------------------------
+# start timers used by an appliance: <appl>
+# ------------------------------------------------------------------------------
+run_apptimers() {
+    [ "${1:--}" = '-' ] && return 0
+    local list entr flds item strt=()
+    embed -r -a list -d '\n' -- centauristartup timer "$1"
+    for entr in "${list[@]}" ; do
+        splitjoin -s flds -i entr -d ' \t'
+        [ "$flds" = '-' -o "$flds" = "$1" ] || continue
+        for item in "${flds[@]:1}" ; do
+            [ "${item:--}" = '-' ] || strt+=("$item.timer")
+        done
+    done
+    if [ -z "$strt" ] ; then
+        invoke -w $"Found %s 'systemd timer' references" "${#strt[@]}" ; return 1
+    fi
+    trace -a -c -p -- + $"Found %s 'systemd timer' references" "${#strt[@]}"
+    runservice start -- "${strt[@]}"
 }
 
 # ------------------------------------------------------------------------------
@@ -301,10 +315,10 @@ run() {
     if [ -e "$scrp" ] ; then
         message -c $"Running script" "$scrp"
         source "$scrp"
-        run_appliances
     else
         warning -c $"Missing script" "$scrp"
     fi
+    run_appliances
 }
 
 # ------------------------------------------------------------------------------
@@ -522,11 +536,10 @@ usage() {
     usageset \
         -t "While linux servers or workstations typically launch a stack of network" \
         -t "related services at startup (e.g. runlevel > 3), an appliance starts at" \
-        -t "runlevel=2 and handles further service starts via centauriswitch configs." \
+        -t "runlevel=2 or 3 and handles further service starts via centauriswitch." \
         -t - \
         -t "$CEN_NAME sources '$CEN_DEFAULT/$CEN_NAME' which can execute" \
-        -t "additional startup code (like 'rc.local' once did). Optionally an array" \
-        -t "named 'appliances' can be added to configure supported appliances." \
+        -t "additional startup code (like 'rc.local' once did)."\
         -t - \
         -t "Appliances use <conf> from the 'centauriswitch=<mode>:<conf>' kernel boot cmd" \
         -t "to start services and other things via '$CEN_DEFAULT/centauriswitch'." \
@@ -544,16 +557,11 @@ usage() {
         -t "and can run a user notification."
 
     usageset \
-        -e "# Configuration file example" \
-        -e "° appliance 'Networking Menu' 2  disabled -  'centaurilogin=local'" \
-        -e "° appliance 'Network Switch'  3  switch" \
-        -e "° appliance 'Home Assistant'  2  smart    -  'centaurilogin=homeassistant'" \
-        -e "° appliance 'Digital Clock'   2  smart    -  'centaurilogin=clock'" \
-        -e "° appliance 'Kiosk Mode'      3  simple   -  'centaurilogin=kiosk'" \
-        -e "# timers to be started in appliance modes" \
-        -e "° apptimers   anacron apt-daily apt-daily-upgrade" \
-        -e "# any bash script code to be run ..." \
-        -e "° [ -x hello-sysinit ] && hello_sysinit"
+        -l "Configuration" \
+        -t "$CEN_DEFAULT/centauristartup  appliances and timers (see centauristartup)" \
+        -t "$CEN_DEFAULT/centauriswitch   network settings and services to be started" \
+        -t "$CEN_DEFAULT/$CEN_NAME  bash script code to run at 'start'" \
+
 }
 
 # ------------------------------------------------------------------------------

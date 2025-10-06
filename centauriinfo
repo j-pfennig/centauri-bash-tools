@@ -1023,6 +1023,31 @@ actionIndex() {
 }
 
 # ------------------------------------------------------------------------------
+# Folder mount location: <what> [<dist> [<base>]]
+# ------------------------------------------------------------------------------
+actionLocation() {
+    local what=("${1:--}") dist="${2:--}" base="${3:-/}" outp head oarr
+
+    ___location_out() {
+        if location -a oarr -b "$base" -d "$dist" -- "$1" ; then
+            "${outp[@]}" "$1" "${oarr[@]}" ; return 0
+        fi
+        error -t                                    # return status
+    }
+
+    if [ "$what" = '-' ] ; then
+        splitjoin -s what -d ':' \
+            'Root:Home:Export:Shared:VBox:Backup:Data:[boot]:[linux]:[swap]'
+        outp=(printf '%-9s %-37s %-15s %s\n')
+        printf -v head '%-9s|%-37s|%-15s|%-16s' $"Volume" $"Location" $"Label" $"Device"
+        do_table -c ___location_out -h "$head" -i what
+    else
+        outp=(printf '%s\t%s\t%s\t%s\n')
+        ___location_out "$what"
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # System Manifest
 # ------------------------------------------------------------------------------
 actionManifest() {
@@ -1271,14 +1296,14 @@ actionMount() {
 
         prettypath -s impt -- "$impt"
         item="${impt%/*}"
-        [ "$item" = "/data/$serv" ] && ivol="[${impt##*/}]"
-        [ "$impt" = "/data/home" ] && ivol="[home]"
+        [ "$item" = "/network/$serv" ] && ivol="[${impt##*/}]"
+        [ "$impt" = "/network/home" ] && ivol="[home]"
 
         if [ "$flds" = "$cdev" ] ; then
             ivol= ; ityp='...' ; clbl='...'
         else
             findmount -r label "$flds"
-            clbl="$CEN_MOUNT_DIR" ; cdev="$flds"
+            clbl="$CEN_MOUNT_LBL" ; cdev="$flds"
         fi
 
         if [ "$CEN_VERB" -gt 1 ] ; then
@@ -1425,6 +1450,8 @@ actions() {
         invoke    'find'       - 1 + ;;
     ind*)
         invoke -r 'index'      - 0 1 ;;
+    loc*)
+        invoke -s 'location'   - 0 3 ;;
     man*)
         invoke -s 'manifest'   - 0 1 ;;
     mon*)
@@ -1466,6 +1493,8 @@ usage() {
         -a 'disks   [all|drives] '$"show disk usage (detailed)" \
         -a 'envir   [<glob>]'     $"show environment variables (optional glob filter)" \
         -a 'find    [--- -]'      $"search and list files or folders using 'find'" \
+        -a 'location [<volu> [<dist> [<base>]]]' \
+        -a  -                     $"show location (path, label, device)" \
         -a 'motd    [disk]'       $"show disk usage (in '/etc/motd' format)" \
         -a 'mounts  [all|drives] '$"show mounted disk partitions" \
         -a 'monitor [<file>|-|+ [<expr>|- [<mark>]]]' \
